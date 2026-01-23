@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- Parallel-in-chain execution with `{ parallel: [...] }` step syntax for fan-out/fan-in patterns
+- Configurable concurrency and fail-fast options for parallel steps
+- Output aggregation with clear separators (`=== Parallel Task N (agent) ===`) for `{previous}`
+- Namespaced artifact directories for parallel tasks (`parallel-{step}/{index}-{agent}/`)
+- Pre-created progress.md for parallel steps to avoid race conditions
+
+### Changed
+- TUI clarification skipped for chains with parallel steps (runs directly in sync mode)
+- Async mode rejects chains with parallel steps with clear error message
+- Chain completion now returns summary blurb with progress.md and artifacts paths instead of raw output
+
+### Added
 - Live progress display for sync subagents (single and chain modes)
 - Shows current tool, recent output lines, token count, and duration during execution
 - Ctrl+O hint during sync execution to expand full streaming view

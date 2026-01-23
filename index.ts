@@ -12,13 +12,13 @@
  *   { "asyncByDefault": true }
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -26,6 +26,28 @@ import { type ExtensionAPI, type ExtensionContext, type ToolDefinition, getMarkd
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import {
+	loadSubagentSettings,
+	resolveChainTemplatesV2,
+	createChainDir,
+	removeChainDir,
+	cleanupOldChainDirs,
+	resolveStepBehavior,
+	resolveParallelBehaviors,
+	buildChainInstructions,
+	createParallelDirs,
+	aggregateParallelOutputs,
+	isParallelStep,
+	isSequentialStep,
+	getStepAgents,
+	type StepOverrides,
+	type ChainStep,
+	type SequentialStep,
+	type ParallelStep,
+	type ParallelTaskResult,
+	type ResolvedTemplates,
+} from "./settings.js";
+import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.js";
 import {
 	appendJsonl,
 	cleanupOldArtifacts,
@@ -83,9 +105,10 @@ interface SingleResult {
 	model?: string;
 	error?: string;
 	sessionFile?: string;
-	shareUrl?: string;
-	gistUrl?: string;
-	shareError?: string;
+	// Sharing disabled - module resolution issues
+	// shareUrl?: string;
+	// gistUrl?: string;
+	// shareError?: string;
 	progress?: AgentProgress;
 	progressSummary?: ProgressSummary;
 	artifactPaths?: ArtifactPaths;
@@ -132,8 +155,9 @@ interface AsyncStatus {
 	outputFile?: string;
 	totalTokens?: TokenUsage;
 	sessionFile?: string;
-	shareUrl?: string;
-	shareError?: string;
+	// Sharing disabled
+	// shareUrl?: string;
+	// shareError?: string;
 }
 
 interface AsyncJobState {
@@ -150,7 +174,7 @@ interface AsyncJobState {
 	outputFile?: string;
 	totalTokens?: TokenUsage;
 	sessionFile?: string;
-	shareUrl?: string;
+	// shareUrl?: string;
 }
 
 function formatTokens(n: number): string {
@@ -173,6 +197,42 @@ function formatDuration(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
 	return `${Math.floor(ms / 60000)}m${Math.floor((ms % 60000) / 1000)}s`;
+}
+
+function buildChainSummary(
+	steps: ChainStep[],
+	results: SingleResult[],
+	chainDir: string,
+	status: "completed" | "failed",
+	failedStep?: { index: number; error: string },
+): string {
+	// Build step names for display
+	const stepNames = steps
+		.map((s) => (isParallelStep(s) ? `parallel[${s.parallel.length}]` : (s as SequentialStep).agent))
+		.join(" → ");
+
+	// Calculate total duration from results
+	const totalDuration = results.reduce((sum, r) => sum + (r.progress?.durationMs || 0), 0);
+	const durationStr = formatDuration(totalDuration);
+
+	// Check for progress.md
+	const progressPath = path.join(chainDir, "progress.md");
+	const hasProgress = fs.existsSync(progressPath);
+
+	if (status === "completed") {
+		const stepWord = results.length === 1 ? "step" : "steps";
+		return `✅ Chain completed: ${stepNames} (${results.length} ${stepWord}, ${durationStr})
+
+📋 Progress: ${hasProgress ? progressPath : "(none)"}
+📁 Artifacts: ${chainDir}`;
+	} else {
+		const stepInfo = failedStep ? ` at step ${failedStep.index + 1}` : "";
+		const errorInfo = failedStep?.error ? `: ${failedStep.error}` : "";
+		return `❌ Chain failed${stepInfo}${errorInfo}
+
+📋 Progress: ${hasProgress ? progressPath : "(none)"}
+📁 Artifacts: ${chainDir}`;
+	}
 }
 
 function readStatus(asyncDir: string): AsyncStatus | null {
@@ -427,45 +487,8 @@ function findLatestSessionFile(sessionDir: string): string | null {
 	}
 }
 
-async function exportSessionHtml(sessionFile: string, outputDir: string): Promise<string> {
-	const pkgRoot = path.dirname(require.resolve("@mariozechner/pi-coding-agent/package.json"));
-	const exportModulePath = path.join(pkgRoot, "dist", "core", "export-html", "index.js");
-	const moduleUrl = pathToFileURL(exportModulePath).href;
-	const mod = await import(moduleUrl);
-	const exportFromFile = (mod as { exportFromFile?: (inputPath: string, options?: { outputPath?: string }) => string })
-		.exportFromFile;
-	if (typeof exportFromFile !== "function") {
-		throw new Error("exportFromFile not available");
-	}
-	const outputPath = path.join(outputDir, `${path.basename(sessionFile, ".jsonl")}.html`);
-	return exportFromFile(sessionFile, { outputPath });
-}
-
-function createShareLink(htmlPath: string): { shareUrl: string; gistUrl: string } | { error: string } {
-	try {
-		const auth = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-		if (auth.status !== 0) {
-			return { error: "GitHub CLI is not logged in. Run 'gh auth login' first." };
-		}
-	} catch {
-		return { error: "GitHub CLI (gh) is not installed." };
-	}
-
-	try {
-		const result = spawnSync("gh", ["gist", "create", htmlPath], { encoding: "utf-8" });
-		if (result.status !== 0) {
-			const err = (result.stderr || "").trim() || "Failed to create gist.";
-			return { error: err };
-		}
-		const gistUrl = (result.stdout || "").trim();
-		const gistId = gistUrl.split("/").pop();
-		if (!gistId) return { error: "Failed to parse gist ID." };
-		const shareUrl = `https://shittycodingagent.ai/session/?${gistId}`;
-		return { shareUrl, gistUrl };
-	} catch (err) {
-		return { error: String(err) };
-	}
-}
+// HTML export and sharing removed - module resolution issues with global pi installation
+// The session files are still available at the paths shown in the output
 
 interface RunSyncOptions {
 	cwd?: string;
@@ -776,20 +799,8 @@ async function runSync(
 		const sessionFile = findLatestSessionFile(options.sessionDir);
 		if (sessionFile) {
 			result.sessionFile = sessionFile;
-			try {
-				const htmlPath = await exportSessionHtml(sessionFile, options.sessionDir);
-				const share = createShareLink(htmlPath);
-				if ("error" in share) {
-					result.shareError = share.error;
-				} else {
-					result.shareUrl = share.shareUrl;
-					result.gistUrl = share.gistUrl;
-				}
-			} catch (err) {
-				result.shareError = String(err);
-			}
-		} else {
-			result.shareError = "Session file not found.";
+			// HTML export disabled - module resolution issues with global pi installation
+			// Users can still access the session file directly
 		}
 	}
 
@@ -813,11 +824,49 @@ async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T, i: n
 }
 
 const TaskItem = Type.Object({ agent: Type.String(), task: Type.String(), cwd: Type.Optional(Type.String()) });
-const ChainItem = Type.Object({
+
+// Sequential chain step (single agent)
+const SequentialStepSchema = Type.Object({
 	agent: Type.String(),
-	task: Type.String({ description: "Use {previous} for prior output" }),
+	task: Type.Optional(Type.String({ description: "Task template. Use {task}, {previous}, {chain_dir}. Required for first step." })),
 	cwd: Type.Optional(Type.String()),
+	// Chain behavior overrides
+	output: Type.Optional(Type.Union([
+		Type.String(),
+		Type.Literal(false),
+	], { description: "Override output filename, or false for text-only" })),
+	reads: Type.Optional(Type.Union([
+		Type.Array(Type.String()),
+		Type.Literal(false),
+	], { description: "Override files to read from {chain_dir}, or false to disable" })),
+	progress: Type.Optional(Type.Boolean({ description: "Override progress tracking" })),
 });
+
+// Parallel task item (within a parallel step)
+const ParallelTaskSchema = Type.Object({
+	agent: Type.String(),
+	task: Type.Optional(Type.String({ description: "Task template. Defaults to {previous}." })),
+	cwd: Type.Optional(Type.String()),
+	output: Type.Optional(Type.Union([
+		Type.String(),
+		Type.Literal(false),
+	], { description: "Override output filename, or false for text-only" })),
+	reads: Type.Optional(Type.Union([
+		Type.Array(Type.String()),
+		Type.Literal(false),
+	], { description: "Override files to read from {chain_dir}, or false to disable" })),
+	progress: Type.Optional(Type.Boolean({ description: "Override progress tracking" })),
+});
+
+// Parallel chain step (multiple agents running concurrently)
+const ParallelStepSchema = Type.Object({
+	parallel: Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" }),
+	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
+	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
+});
+
+// Chain item can be either sequential or parallel
+const ChainItem = Type.Union([SequentialStepSchema, ParallelStepSchema]);
 
 const MaxOutputSchema = Type.Optional(
 	Type.Object({
@@ -841,6 +890,13 @@ const Params = Type.Object({
 	sessionDir: Type.Optional(
 		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
 	),
+	// Chain clarification TUI
+	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to clarify chain templates (default: true for chains). Implies sync mode." })),
+	// Solo agent output override
+	output: Type.Optional(Type.Union([
+		Type.String(),
+		Type.Literal(false),
+	], { description: "Override output file for single agent (uses agent default if omitted)" })),
 });
 
 const StatusParams = Type.Object({
@@ -865,6 +921,9 @@ function loadConfig(): ExtensionConfig {
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	fs.mkdirSync(RESULTS_DIR, { recursive: true });
 	fs.mkdirSync(ASYNC_DIR, { recursive: true });
+
+	// Cleanup old chain directories on startup (after 24h)
+	cleanupOldChainDirs();
 
 	const config = loadConfig();
 	const asyncByDefault = config.asyncByDefault === true;
@@ -904,7 +963,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					job.outputFile = status.outputFile ?? job.outputFile;
 					job.totalTokens = status.totalTokens ?? job.totalTokens;
 					job.sessionFile = status.sessionFile ?? job.sessionFile;
-					job.shareUrl = status.shareUrl ?? job.shareUrl;
+					// job.shareUrl = status.shareUrl ?? job.shareUrl;
 				} else {
 					job.status = job.status === "queued" ? "running" : job.status;
 					job.updatedAt = Date.now();
@@ -968,7 +1027,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 			const requestedAsync = params.async ?? asyncByDefault;
 			const parallelDowngraded = hasTasks && requestedAsync;
-			const isAsync = requestedAsync && !hasTasks;
+			// clarify implies sync mode (TUI is blocking)
+			// If user requested async without explicit clarify: false, downgrade to sync for chains
+			const effectiveAsync = requestedAsync && !hasTasks && (hasChain ? params.clarify === false : true);
 
 			const artifactConfig: ArtifactConfig = {
 				...DEFAULT_ARTIFACT_CONFIG,
@@ -976,7 +1037,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			};
 
 			const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
-			const artifactsDir = isAsync ? tempArtifactsDir : getArtifactsDir(sessionFile);
+			const artifactsDir = effectiveAsync ? tempArtifactsDir : getArtifactsDir(sessionFile);
 
 			if (Number(hasChain) + Number(hasTasks) + Number(hasSingle) !== 1) {
 				return {
@@ -991,7 +1052,57 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			if (isAsync) {
+			// Validate chain early (before async/sync branching)
+			if (hasChain && params.chain) {
+				if (params.chain.length === 0) {
+					return {
+						content: [{ type: "text", text: "Chain must have at least one step" }],
+						isError: true,
+						details: { mode: "chain" as const, results: [] },
+					};
+				}
+				// First step must have a task
+				const firstStep = params.chain[0] as ChainStep;
+				if (isParallelStep(firstStep)) {
+					if (!firstStep.parallel[0]?.task) {
+						return {
+							content: [{ type: "text", text: "First parallel task must have a task" }],
+							isError: true,
+							details: { mode: "chain" as const, results: [] },
+						};
+					}
+				} else if (!(firstStep as SequentialStep).task) {
+					return {
+						content: [{ type: "text", text: "First step in chain must have a task" }],
+						isError: true,
+						details: { mode: "chain" as const, results: [] },
+					};
+				}
+				// Validate all agents exist
+				for (let i = 0; i < params.chain.length; i++) {
+					const step = params.chain[i] as ChainStep;
+					const stepAgents = getStepAgents(step);
+					for (const agentName of stepAgents) {
+						if (!agents.find((a) => a.name === agentName)) {
+							return {
+								content: [{ type: "text", text: `Unknown agent: ${agentName} (step ${i + 1})` }],
+								isError: true,
+								details: { mode: "chain" as const, results: [] },
+							};
+						}
+					}
+					// Validate parallel steps have at least one task
+					if (isParallelStep(step) && step.parallel.length === 0) {
+						return {
+							content: [{ type: "text", text: `Parallel step ${i + 1} must have at least one task` }],
+							isError: true,
+							details: { mode: "chain" as const, results: [] },
+						};
+					}
+				}
+			}
+
+			if (effectiveAsync) {
 				if (!jitiCliPath)
 					return {
 						content: [{ type: "text", text: "jiti not found" }],
@@ -1018,12 +1129,36 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				};
 
 				if (hasChain && params.chain) {
-					const steps = params.chain.map((s) => {
-						const a = agents.find((x) => x.name === s.agent);
-						if (!a) throw new Error(`Unknown: ${s.agent}`);
+					// Async mode doesn't support parallel steps (v1 limitation)
+					const chainStepsForAsync = params.chain as ChainStep[];
+					const hasParallelInChain = chainStepsForAsync.some(isParallelStep);
+					if (hasParallelInChain) {
+						return {
+							content: [{ type: "text", text: "Async mode doesn't support chains with parallel steps. Use clarify: true (sync mode) for parallel-in-chain." }],
+							isError: true,
+							details: { mode: "chain" as const, results: [] },
+						};
+					}
+
+					// At this point, all steps are sequential
+					const seqSteps = chainStepsForAsync as SequentialStep[];
+
+					// Validate all agents exist before building steps
+					for (const s of seqSteps) {
+						if (!agents.find((x) => x.name === s.agent)) {
+							return {
+								content: [{ type: "text", text: `Unknown agent: ${s.agent}` }],
+								isError: true,
+								details: { mode: "chain" as const, results: [] },
+							};
+						}
+					}
+					const steps = seqSteps.map((s, i) => {
+						const a = agents.find((x) => x.name === s.agent)!;
 						return {
 							agent: s.agent,
-							task: s.task,
+							// For async, use simple defaults: first step uses inline task, others use {previous}
+							task: s.task ?? (i === 0 ? "{task}" : "{previous}"),
 							cwd: s.cwd,
 							model: a.model,
 							tools: a.tools,
@@ -1138,69 +1273,328 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			const allArtifactPaths: ArtifactPaths[] = [];
 
 			if (hasChain && params.chain) {
-				const results: SingleResult[] = [];
-				let prev = "";
-				for (let i = 0; i < params.chain.length; i++) {
-					const step = params.chain[i];
-					const taskWithPrev = step.task.replace(/\{previous\}/g, prev);
-					const r = await runSync(ctx.cwd, agents, step.agent, taskWithPrev, {
-						cwd: step.cwd ?? params.cwd,
-						signal,
-						runId,
-						index: i,
-						sessionDir: sessionDirForIndex(i),
-						share: shareEnabled,
-						artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-						artifactConfig,
-						onUpdate: onUpdate
-							? (p) =>
-									onUpdate({
-										...p,
-										details: {
-											mode: "chain",
-											results: [...results, ...(p.details?.results || [])],
-											progress: [...allProgress, ...(p.details?.progress || [])],
-										},
-									})
-							: undefined,
-					});
-					results.push(r);
-					if (r.progress) allProgress.push(r.progress);
-					if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
-					if (r.exitCode !== 0)
+				// Cast chain to typed steps
+				const chainSteps = params.chain as ChainStep[];
+
+				// Get original task from first step
+				const firstStep = chainSteps[0]!;
+				const originalTask = isParallelStep(firstStep)
+					? firstStep.parallel[0]!.task!
+					: (firstStep as SequentialStep).task!;
+
+				// Create chain directory
+				const chainDir = createChainDir(runId);
+
+				// Check if chain has any parallel steps
+				const hasParallelSteps = chainSteps.some(isParallelStep);
+
+				// Resolve templates using V2 (parallel-aware)
+				const settings = loadSubagentSettings();
+				let templates: ResolvedTemplates = resolveChainTemplatesV2(chainSteps, settings);
+
+				// For TUI: only show if no parallel steps (TUI v1 doesn't support parallel display)
+				// TODO: Update TUI to support parallel steps
+				const shouldClarify = params.clarify !== false && ctx.hasUI && !hasParallelSteps;
+
+				if (shouldClarify) {
+					// Sequential-only chain: use existing TUI
+					const seqSteps = chainSteps as SequentialStep[];
+
+					// Load agent configs for sequential steps
+					const agentConfigs: AgentConfig[] = [];
+					for (const step of seqSteps) {
+						const config = agents.find((a) => a.name === step.agent);
+						if (!config) {
+							removeChainDir(chainDir);
+							return {
+								content: [{ type: "text", text: `Unknown agent: ${step.agent}` }],
+								isError: true,
+								details: { mode: "chain" as const, results: [] },
+							};
+						}
+						agentConfigs.push(config);
+					}
+
+					// Build step overrides
+					const stepOverrides: StepOverrides[] = seqSteps.map((step) => ({
+						output: step.output,
+						reads: step.reads,
+						progress: step.progress,
+					}));
+
+					// Pre-resolve behaviors for TUI display
+					const resolvedBehaviors = agentConfigs.map((config, i) =>
+						resolveStepBehavior(config, stepOverrides[i]!),
+					);
+
+					// Flatten templates for TUI (all strings for sequential)
+					const flatTemplates = templates as string[];
+
+					const result = await ctx.ui.custom<ChainClarifyResult>(
+						(_tui, theme, _kb, done) =>
+							new ChainClarifyComponent(
+								theme,
+								agentConfigs,
+								flatTemplates,
+								originalTask,
+								chainDir,
+								resolvedBehaviors,
+								done,
+							),
+						{
+							overlay: true,
+							overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+						},
+					);
+
+					if (!result || !result.confirmed) {
+						removeChainDir(chainDir);
 						return {
-							content: [{ type: "text", text: r.error || "Chain failed" }],
-							details: {
-								mode: "chain",
-								results,
-								progress: params.includeProgress ? allProgress : undefined,
-								artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-							},
-							isError: true,
+							content: [{ type: "text", text: "Chain cancelled" }],
+							details: { mode: "chain", results: [] },
 						};
-					prev = getFinalOutput(r.messages);
+					}
+					// Update templates from TUI result
+					templates = result.templates;
 				}
 
-				let finalOutput = prev;
-				let truncationInfo: Details["truncation"];
-				if (params.maxOutput) {
-					const config = { ...DEFAULT_MAX_OUTPUT, ...params.maxOutput };
-					const outputPath = allArtifactPaths[allArtifactPaths.length - 1]?.outputPath;
-					const truncResult = truncateOutput(prev, config, outputPath);
-					if (truncResult.truncated) {
-						finalOutput = truncResult.text;
-						truncationInfo = truncResult;
+				// Execute chain (handles both sequential and parallel steps)
+				const results: SingleResult[] = [];
+				let prev = "";
+				let globalTaskIndex = 0; // For unique artifact naming
+				let progressCreated = false; // Track if progress.md has been created
+
+				for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
+					const step = chainSteps[stepIndex]!;
+					const stepTemplates = templates[stepIndex]!;
+
+					if (isParallelStep(step)) {
+						// === PARALLEL STEP EXECUTION ===
+						const parallelTemplates = stepTemplates as string[];
+						const concurrency = step.concurrency ?? MAX_CONCURRENCY;
+						const failFast = step.failFast ?? false;
+
+						// Create subdirectories for parallel outputs
+						const agentNames = step.parallel.map((t) => t.agent);
+						createParallelDirs(chainDir, stepIndex, step.parallel.length, agentNames);
+
+						// Resolve behaviors for parallel tasks
+						const parallelBehaviors = resolveParallelBehaviors(step.parallel, agents, stepIndex);
+
+						// If any parallel task has progress enabled and progress.md hasn't been created,
+						// create it now to avoid race conditions
+						const anyNeedsProgress = parallelBehaviors.some((b) => b.progress);
+						if (anyNeedsProgress && !progressCreated) {
+							const progressPath = path.join(chainDir, "progress.md");
+							fs.writeFileSync(progressPath, "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n");
+							progressCreated = true;
+						}
+
+						// Track if we should abort remaining tasks (for fail-fast)
+						let aborted = false;
+
+						// Execute parallel tasks
+						const parallelResults = await mapConcurrent(
+							step.parallel,
+							concurrency,
+							async (task, taskIndex) => {
+								if (aborted && failFast) {
+									// Return a placeholder for skipped tasks
+									return {
+										agent: task.agent,
+										task: "(skipped)",
+										exitCode: -1,
+										messages: [],
+										usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+										error: "Skipped due to fail-fast",
+									} as SingleResult;
+								}
+
+								// Build task string
+								let taskStr = parallelTemplates[taskIndex] ?? "{previous}";
+								taskStr = taskStr.replace(/\{task\}/g, originalTask);
+								taskStr = taskStr.replace(/\{previous\}/g, prev);
+								taskStr = taskStr.replace(/\{chain_dir\}/g, chainDir);
+
+								// Add chain instructions
+								const behavior = parallelBehaviors[taskIndex]!;
+								// For parallel, no single "first progress" - each manages independently
+								taskStr += buildChainInstructions(behavior, chainDir, false);
+
+								const r = await runSync(ctx.cwd, agents, task.agent, taskStr, {
+									cwd: task.cwd ?? params.cwd,
+									signal,
+									runId,
+									index: globalTaskIndex + taskIndex,
+									sessionDir: sessionDirForIndex(globalTaskIndex + taskIndex),
+									share: shareEnabled,
+									artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+									artifactConfig,
+									onUpdate: onUpdate
+										? (p) =>
+												onUpdate({
+													...p,
+													details: {
+														mode: "chain",
+														results: [...results, ...(p.details?.results || [])],
+														progress: [...allProgress, ...(p.details?.progress || [])],
+													},
+												})
+										: undefined,
+								});
+
+								if (r.exitCode !== 0 && failFast) {
+									aborted = true;
+								}
+
+								return r;
+							},
+						);
+
+						// Update global task index
+						globalTaskIndex += step.parallel.length;
+
+						// Collect results and progress
+						for (const r of parallelResults) {
+							results.push(r);
+							if (r.progress) allProgress.push(r.progress);
+							if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
+						}
+
+						// Check for failures (track original task index for better error messages)
+						const failures = parallelResults
+							.map((r, originalIndex) => ({ ...r, originalIndex }))
+							.filter((r) => r.exitCode !== 0 && r.exitCode !== -1);
+						if (failures.length > 0) {
+							const failureSummary = failures
+								.map((f) => `- Task ${f.originalIndex + 1} (${f.agent}): ${f.error || "failed"}`)
+								.join("\n");
+							const errorMsg = `Parallel step ${stepIndex + 1} failed:\n${failureSummary}`;
+							const summary = buildChainSummary(chainSteps, results, chainDir, "failed", {
+								index: stepIndex,
+								error: errorMsg,
+							});
+							return {
+								content: [{ type: "text", text: summary }],
+								details: {
+									mode: "chain",
+									results,
+									progress: params.includeProgress ? allProgress : undefined,
+									artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+								},
+								isError: true,
+							};
+						}
+
+						// Aggregate outputs for {previous}
+						const taskResults: ParallelTaskResult[] = parallelResults.map((r, i) => ({
+							agent: r.agent,
+							taskIndex: i,
+							output: getFinalOutput(r.messages),
+							exitCode: r.exitCode,
+							error: r.error,
+						}));
+						prev = aggregateParallelOutputs(taskResults);
+					} else {
+						// === SEQUENTIAL STEP EXECUTION ===
+						const seqStep = step as SequentialStep;
+						const stepTemplate = stepTemplates as string;
+
+						// Get agent config
+						const agentConfig = agents.find((a) => a.name === seqStep.agent);
+						if (!agentConfig) {
+							removeChainDir(chainDir);
+							return {
+								content: [{ type: "text", text: `Unknown agent: ${seqStep.agent}` }],
+								isError: true,
+								details: { mode: "chain" as const, results: [] },
+							};
+						}
+
+						// Build task string
+						let stepTask = stepTemplate;
+						stepTask = stepTask.replace(/\{task\}/g, originalTask);
+						stepTask = stepTask.replace(/\{previous\}/g, prev);
+						stepTask = stepTask.replace(/\{chain_dir\}/g, chainDir);
+
+						// Resolve behavior
+						const stepOverride: StepOverrides = {
+							output: seqStep.output,
+							reads: seqStep.reads,
+							progress: seqStep.progress,
+						};
+						const behavior = resolveStepBehavior(agentConfig, stepOverride);
+
+						// Determine if this is the first agent to create progress.md
+						const isFirstProgress = behavior.progress && !progressCreated;
+						if (isFirstProgress) {
+							progressCreated = true;
+						}
+
+						// Add chain instructions
+						stepTask += buildChainInstructions(behavior, chainDir, isFirstProgress);
+
+						// Run step
+						const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
+							cwd: seqStep.cwd ?? params.cwd,
+							signal,
+							runId,
+							index: globalTaskIndex,
+							sessionDir: sessionDirForIndex(globalTaskIndex),
+							share: shareEnabled,
+							artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+							artifactConfig,
+							onUpdate: onUpdate
+								? (p) =>
+										onUpdate({
+											...p,
+											details: {
+												mode: "chain",
+												results: [...results, ...(p.details?.results || [])],
+												progress: [...allProgress, ...(p.details?.progress || [])],
+											},
+										})
+								: undefined,
+						});
+
+						globalTaskIndex++;
+						results.push(r);
+						if (r.progress) allProgress.push(r.progress);
+						if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
+
+						// On failure, leave chain_dir for debugging
+						if (r.exitCode !== 0) {
+							const summary = buildChainSummary(chainSteps, results, chainDir, "failed", {
+								index: stepIndex,
+								error: r.error || "Chain failed",
+							});
+							return {
+								content: [{ type: "text", text: summary }],
+								details: {
+									mode: "chain",
+									results,
+									progress: params.includeProgress ? allProgress : undefined,
+									artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+								},
+								isError: true,
+							};
+						}
+
+						prev = getFinalOutput(r.messages);
 					}
 				}
 
+				// Chain complete - return summary with paths
+				// Chain dir left for inspection (cleaned up after 24h)
+				const summary = buildChainSummary(chainSteps, results, chainDir, "completed");
+
 				return {
-					content: [{ type: "text", text: finalOutput || "(no output)" }],
+					content: [{ type: "text", text: summary }],
 					details: {
 						mode: "chain",
 						results,
 						progress: params.includeProgress ? allProgress : undefined,
 						artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-						truncation: truncationInfo,
 					},
 				};
 			}
@@ -1245,7 +1639,29 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 
 			if (hasSingle) {
-				const r = await runSync(ctx.cwd, agents, params.agent!, params.task!, {
+				// Look up agent config for output handling
+				const agentConfig = agents.find((a) => a.name === params.agent);
+				// Note: runSync already handles unknown agent, but we need config for output
+
+				let task = params.task!;
+				let outputPath: string | undefined;
+
+				// Check if agent has output and it's not disabled
+				if (agentConfig) {
+					const effectiveOutput =
+						params.output !== undefined ? params.output : agentConfig.output;
+
+					if (effectiveOutput && effectiveOutput !== false) {
+						const outputDir = `/tmp/pi-${agentConfig.name}-${runId}`;
+						fs.mkdirSync(outputDir, { recursive: true });
+						outputPath = `${outputDir}/${effectiveOutput}`;
+
+						// Inject output instruction into task
+						task += `\n\n---\n**Output:** Write your findings to: ${outputPath}`;
+					}
+				}
+
+				const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 					cwd: params.cwd,
 					signal,
 					runId,
@@ -1260,7 +1676,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				if (r.progress) allProgress.push(r.progress);
 				if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 
-				const output = r.truncation?.text || getFinalOutput(r.messages);
+				// Get output and append file path if applicable
+				let output = r.truncation?.text || getFinalOutput(r.messages);
+				if (outputPath && r.exitCode === 0) {
+					output += `\n\n📄 Output saved to: ${outputPath}`;
+				}
 
 				if (r.exitCode !== 0)
 					return {
@@ -1362,11 +1782,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					if (r.sessionFile) {
 						c.addChild(new Text(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`), 0, 0));
 					}
-					if (r.shareUrl) {
-						c.addChild(new Text(theme.fg("dim", `Share: ${r.shareUrl}`), 0, 0));
-					} else if (r.shareError) {
-						c.addChild(new Text(theme.fg("warning", `Share error: ${r.shareError}`), 0, 0));
-					}
+					// Sharing disabled - session file path shown above
 
 					if (r.artifactPaths) {
 						c.addChild(new Spacer(1));
@@ -1477,11 +1893,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 						if (r.sessionFile) {
 							c.addChild(new Text(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`), 0, 0));
 						}
-						if (r.shareUrl) {
-							c.addChild(new Text(theme.fg("dim", `Share: ${r.shareUrl}`), 0, 0));
-						} else if (r.shareError) {
-							c.addChild(new Text(theme.fg("warning", `Share error: ${r.shareError}`), 0, 0));
-						}
+						// Sharing disabled - session file path shown above
 					}
 				}
 
@@ -1575,8 +1987,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 						`Dir: ${asyncDir}`,
 					];
 					if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
-					if (status.shareUrl) lines.push(`Share: ${status.shareUrl}`);
-					if (status.shareError) lines.push(`Share error: ${status.shareError}`);
+					// Sharing disabled - session file path shown above
 					if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 					if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
 
