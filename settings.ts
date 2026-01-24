@@ -1,29 +1,13 @@
 /**
- * Subagent settings, chain behavior, and template management
+ * Chain behavior, template resolution, and directory management
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "./agents.js";
 
-const SETTINGS_PATH = path.join(os.homedir(), ".pi", "agent", "settings.json");
 const CHAIN_RUNS_DIR = "/tmp/pi-chain-runs";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-// =============================================================================
-// Settings Types
-// =============================================================================
-
-export interface ChainTemplates {
-	[chainKey: string]: {
-		[agentName: string]: string;
-	};
-}
-
-export interface SubagentSettings {
-	chains?: ChainTemplates;
-}
 
 // =============================================================================
 // Behavior Resolution Types
@@ -83,61 +67,12 @@ export function isParallelStep(step: ChainStep): step is ParallelStep {
 	return "parallel" in step && Array.isArray((step as ParallelStep).parallel);
 }
 
-export function isSequentialStep(step: ChainStep): step is SequentialStep {
-	return "agent" in step && !("parallel" in step);
-}
-
 /** Get all agent names in a step (single for sequential, multiple for parallel) */
 export function getStepAgents(step: ChainStep): string[] {
 	if (isParallelStep(step)) {
 		return step.parallel.map((t) => t.agent);
 	}
 	return [step.agent];
-}
-
-/** Get total task count in a step */
-export function getStepTaskCount(step: ChainStep): number {
-	if (isParallelStep(step)) {
-		return step.parallel.length;
-	}
-	return 1;
-}
-
-// =============================================================================
-// Settings Management
-// =============================================================================
-
-export function loadSubagentSettings(): SubagentSettings {
-	try {
-		const data = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf-8"));
-		return (data.subagent as SubagentSettings) ?? {};
-	} catch {
-		return {};
-	}
-}
-
-export function saveChainTemplate(chainKey: string, templates: Record<string, string>): void {
-	let settings: Record<string, unknown> = {};
-	try {
-		settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf-8"));
-	} catch {}
-
-	if (!settings.subagent) settings.subagent = {};
-	const subagent = settings.subagent as Record<string, unknown>;
-	if (!subagent.chains) subagent.chains = {};
-	const chains = subagent.chains as Record<string, unknown>;
-
-	chains[chainKey] = templates;
-
-	const dir = path.dirname(SETTINGS_PATH);
-	if (!fs.existsSync(dir)) {
-		fs.mkdirSync(dir, { recursive: true });
-	}
-	fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
-}
-
-export function getChainKey(agents: string[]): string {
-	return agents.join("->");
 }
 
 // =============================================================================
@@ -183,36 +118,6 @@ export function cleanupOldChainDirs(): void {
 // Template Resolution
 // =============================================================================
 
-/**
- * Resolve templates for each step in a chain.
- * Priority: inline task > saved template > default
- * Default for step 0: "{task}", for others: "{previous}"
- */
-export function resolveChainTemplates(
-	agentNames: string[],
-	inlineTasks: (string | undefined)[],
-	settings: SubagentSettings,
-): string[] {
-	const chainKey = getChainKey(agentNames);
-	const savedTemplates = settings.chains?.[chainKey] ?? {};
-
-	return agentNames.map((agent, i) => {
-		// Priority: inline > saved > default
-		const inline = inlineTasks[i];
-		if (inline) return inline;
-
-		const saved = savedTemplates[agent];
-		if (saved) return saved;
-
-		// Default: first step uses {task}, others use {previous}
-		return i === 0 ? "{task}" : "{previous}";
-	});
-}
-
-// =============================================================================
-// Parallel-Aware Template Resolution
-// =============================================================================
-
 /** Resolved templates for a chain - string for sequential, string[] for parallel */
 export type ResolvedTemplates = (string | string[])[];
 
@@ -220,9 +125,8 @@ export type ResolvedTemplates = (string | string[])[];
  * Resolve templates for a chain with parallel step support.
  * Returns string for sequential steps, string[] for parallel steps.
  */
-export function resolveChainTemplatesV2(
+export function resolveChainTemplates(
 	steps: ChainStep[],
-	settings: SubagentSettings,
 ): ResolvedTemplates {
 	return steps.map((step, i) => {
 		if (isParallelStep(step)) {
@@ -239,43 +143,6 @@ export function resolveChainTemplatesV2(
 		// Default: first step uses {task}, others use {previous}
 		return i === 0 ? "{task}" : "{previous}";
 	});
-}
-
-/**
- * Flatten templates for display (TUI navigation needs flat list)
- */
-export function flattenTemplates(templates: ResolvedTemplates): string[] {
-	const result: string[] = [];
-	for (const t of templates) {
-		if (Array.isArray(t)) {
-			result.push(...t);
-		} else {
-			result.push(t);
-		}
-	}
-	return result;
-}
-
-/**
- * Unflatten templates back to structured form
- */
-export function unflattenTemplates(
-	flat: string[],
-	steps: ChainStep[],
-): ResolvedTemplates {
-	const result: ResolvedTemplates = [];
-	let idx = 0;
-	for (const step of steps) {
-		if (isParallelStep(step)) {
-			const count = step.parallel.length;
-			result.push(flat.slice(idx, idx + count));
-			idx += count;
-		} else {
-			result.push(flat[idx]!);
-			idx++;
-		}
-	}
-	return result;
 }
 
 // =============================================================================
@@ -309,20 +176,6 @@ export function resolveStepBehavior(
 			: agentConfig.defaultProgress ?? false;
 
 	return { output, reads, progress };
-}
-
-/**
- * Find index of first agent in chain that has progress enabled
- */
-export function findFirstProgressAgentIndex(
-	agentConfigs: AgentConfig[],
-	stepOverrides: StepOverrides[],
-): number {
-	return agentConfigs.findIndex((config, i) => {
-		const override = stepOverrides[i];
-		if (override?.progress !== undefined) return override.progress;
-		return config.defaultProgress ?? false;
-	});
 }
 
 // =============================================================================
@@ -472,21 +325,4 @@ export function aggregateParallelOutputs(results: ParallelTaskResult[]): string 
 		.join("\n\n");
 }
 
-/**
- * Check if any parallel task failed
- */
-export function hasParallelFailures(results: ParallelTaskResult[]): boolean {
-	return results.some((r) => r.exitCode !== 0);
-}
 
-/**
- * Get failure summary for parallel step
- */
-export function getParallelFailureSummary(results: ParallelTaskResult[]): string {
-	const failures = results.filter((r) => r.exitCode !== 0);
-	if (failures.length === 0) return "";
-
-	return failures
-		.map((f) => `- Task ${f.taskIndex + 1} (${f.agent}): ${f.error || "failed"}`)
-		.join("\n");
-}

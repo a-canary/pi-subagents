@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.1] - 2026-01-24
+
+### Changed
+- **Major code refactor** - Split monolithic index.ts into focused modules:
+  - `execution.ts` - Core runSync function for single agent execution
+  - `chain-execution.ts` - Chain orchestration (sequential + parallel steps)
+  - `async-execution.ts` - Async/background execution support
+  - `render.ts` - TUI rendering (widget, tool result display)
+  - `schemas.ts` - TypeBox parameter schemas
+  - `formatters.ts` - Output formatting utilities
+  - `utils.ts` - Shared utility functions
+  - `types.ts` - Shared type definitions and constants
+
+### Fixed
+- **Expanded view visibility** - Running chains now properly show:
+  - Task preview (truncated to 80 chars) for each step
+  - Recent tools fallback when between tool calls
+  - Increased recent output from 2 to 3 lines
+- **Progress matching** - Added agent name fallback when index doesn't match
+- **Type safety** - Added defensive `?? []` for `recentOutput` access on union types
+
 ## [0.3.0] - 2026-01-24
 
 ### Added

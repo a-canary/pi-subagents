@@ -1,3 +1,13 @@
+/**
+ * Type definitions for the subagent extension
+ */
+
+import type { Message } from "@mariozechner/pi-ai";
+
+// ============================================================================
+// Basic Types
+// ============================================================================
+
 export interface MaxOutputConfig {
 	bytes?: number;
 	lines?: number;
@@ -10,6 +20,25 @@ export interface TruncationResult {
 	originalLines?: number;
 	artifactPath?: string;
 }
+
+export interface Usage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+	turns: number;
+}
+
+export interface TokenUsage {
+	input: number;
+	output: number;
+	total: number;
+}
+
+// ============================================================================
+// Progress Tracking
+// ============================================================================
 
 export interface AgentProgress {
 	index: number;
@@ -33,6 +62,52 @@ export interface ProgressSummary {
 	durationMs: number;
 }
 
+// ============================================================================
+// Results
+// ============================================================================
+
+export interface SingleResult {
+	agent: string;
+	task: string;
+	exitCode: number;
+	messages: Message[];
+	usage: Usage;
+	model?: string;
+	error?: string;
+	sessionFile?: string;
+	progress?: AgentProgress;
+	progressSummary?: ProgressSummary;
+	artifactPaths?: ArtifactPaths;
+	truncation?: TruncationResult;
+}
+
+export interface Details {
+	mode: "single" | "parallel" | "chain";
+	results: SingleResult[];
+	asyncId?: string;
+	asyncDir?: string;
+	progress?: AgentProgress[];
+	progressSummary?: ProgressSummary;
+	artifacts?: {
+		dir: string;
+		files: ArtifactPaths[];
+	};
+	truncation?: {
+		truncated: boolean;
+		originalBytes?: number;
+		originalLines?: number;
+		artifactPath?: string;
+	};
+	// Chain metadata for observability
+	chainAgents?: string[];      // Agent names in order, e.g., ["scout", "planner"]
+	totalSteps?: number;         // Total steps in chain
+	currentStepIndex?: number;   // 0-indexed current step (for running chains)
+}
+
+// ============================================================================
+// Artifacts
+// ============================================================================
+
 export interface ArtifactPaths {
 	inputPath: string;
 	outputPath: string;
@@ -49,6 +124,85 @@ export interface ArtifactConfig {
 	cleanupDays: number;
 }
 
+// ============================================================================
+// Async Execution
+// ============================================================================
+
+export interface AsyncStatus {
+	runId: string;
+	mode: "single" | "chain";
+	state: "queued" | "running" | "complete" | "failed";
+	startedAt: number;
+	endedAt?: number;
+	lastUpdate?: number;
+	currentStep?: number;
+	steps?: Array<{ agent: string; status: string; durationMs?: number; tokens?: TokenUsage }>;
+	sessionDir?: string;
+	outputFile?: string;
+	totalTokens?: TokenUsage;
+	sessionFile?: string;
+}
+
+export interface AsyncJobState {
+	asyncId: string;
+	asyncDir: string;
+	status: "queued" | "running" | "complete" | "failed";
+	mode?: "single" | "chain";
+	agents?: string[];
+	currentStep?: number;
+	stepsTotal?: number;
+	startedAt?: number;
+	updatedAt?: number;
+	sessionDir?: string;
+	outputFile?: string;
+	totalTokens?: TokenUsage;
+	sessionFile?: string;
+}
+
+// ============================================================================
+// Display
+// ============================================================================
+
+export type DisplayItem = 
+	| { type: "text"; text: string } 
+	| { type: "tool"; name: string; args: Record<string, unknown> };
+
+// ============================================================================
+// Error Handling
+// ============================================================================
+
+export interface ErrorInfo {
+	hasError: boolean;
+	exitCode?: number;
+	errorType?: string;
+	details?: string;
+}
+
+// ============================================================================
+// Execution Options
+// ============================================================================
+
+export interface RunSyncOptions {
+	cwd?: string;
+	signal?: AbortSignal;
+	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
+	maxOutput?: MaxOutputConfig;
+	artifactsDir?: string;
+	artifactConfig?: ArtifactConfig;
+	runId: string;
+	index?: number;
+	sessionDir?: string;
+	share?: boolean;
+}
+
+export interface ExtensionConfig {
+	asyncByDefault?: boolean;
+}
+
+// ============================================================================
+// Constants
+// ============================================================================
+
 export const DEFAULT_MAX_OUTPUT: Required<MaxOutputConfig> = {
 	bytes: 200 * 1024,
 	lines: 5000,
@@ -62,6 +216,18 @@ export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 	includeMetadata: true,
 	cleanupDays: 7,
 };
+
+export const MAX_PARALLEL = 8;
+export const MAX_CONCURRENCY = 4;
+export const RESULTS_DIR = "/tmp/pi-async-subagent-results";
+export const ASYNC_DIR = "/tmp/pi-async-subagent-runs";
+export const WIDGET_KEY = "subagent-async";
+export const POLL_INTERVAL_MS = 1000;
+export const MAX_WIDGET_JOBS = 4;
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
 
 export function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
