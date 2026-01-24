@@ -21,7 +21,7 @@
     "cli"
   ],
   "bin": {
-    "pi-subagents": "./install.mjs"
+    "pi-subagents": "install.mjs"
   },
   "files": [
     "*.ts",
