@@ -73,6 +73,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let baseCwd = process.cwd();
 	let currentSessionId: string | null = null;
 	const asyncJobs = new Map<string, AsyncJobState>();
+	const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>(); // Track cleanup timeouts
 	let lastUiContext: ExtensionContext | null = null;
 	let poller: NodeJS.Timeout | null = null;
 
@@ -593,10 +594,13 @@ For "scout → planner" or multi-step flows, use chain (not multiple single call
 		if (lastUiContext) {
 			renderWidget(lastUiContext, Array.from(asyncJobs.values()));
 		}
-		setTimeout(() => {
+		// Schedule cleanup after 10 seconds (track timer for cleanup on shutdown)
+		const timer = setTimeout(() => {
+			cleanupTimers.delete(asyncId);
 			asyncJobs.delete(asyncId);
 			if (lastUiContext) renderWidget(lastUiContext, Array.from(asyncJobs.values()));
 		}, 10000);
+		cleanupTimers.set(asyncId, timer);
 	});
 
 	pi.on("tool_result", (event, ctx) => {
@@ -640,6 +644,11 @@ For "scout → planner" or multi-step flows, use chain (not multiple single call
 		watcher.close();
 		if (poller) clearInterval(poller);
 		poller = null;
+		// Clear all pending cleanup timers
+		for (const timer of cleanupTimers.values()) {
+			clearTimeout(timer);
+		}
+		cleanupTimers.clear();
 		asyncJobs.clear();
 		if (lastUiContext?.hasUI) {
 			lastUiContext.ui.setWidget(WIDGET_KEY, undefined);

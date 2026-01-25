@@ -126,11 +126,14 @@ export function findLatestSessionFile(sessionDir: string): string | null {
 	if (!fs.existsSync(sessionDir)) return null;
 	const files = fs.readdirSync(sessionDir)
 		.filter((f) => f.endsWith(".jsonl"))
-		.map((f) => ({
-			name: f,
-			path: path.join(sessionDir, f),
-			mtime: fs.statSync(path.join(sessionDir, f)).mtimeMs,
-		}))
+		.map((f) => {
+			const filePath = path.join(sessionDir, f);
+			return {
+				name: f,
+				path: filePath,
+				mtime: fs.statSync(filePath).mtimeMs,
+			};
+		})
 		.sort((a, b) => b.mtime - a.mtime);
 	return files.length > 0 ? files[0].path : null;
 }
