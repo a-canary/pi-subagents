@@ -146,6 +146,11 @@ export async function runSync(
 
 			if (elapsed >= UPDATE_THROTTLE_MS) {
 				// Enough time passed, update immediately
+				// Clear any pending timer to avoid double-updates
+				if (pendingTimer) {
+					clearTimeout(pendingTimer);
+					pendingTimer = null;
+				}
 				lastUpdateTime = now;
 				updatePending = false;
 				progress.durationMs = now - startTime;

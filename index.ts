@@ -88,6 +88,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 
 			for (const job of asyncJobs.values()) {
+				// Skip status reads for finished jobs - they won't change
+				if (job.status === "complete" || job.status === "failed") {
+					continue;
+				}
 				const status = readStatus(job.asyncDir);
 				if (status) {
 					job.status = status.state;
