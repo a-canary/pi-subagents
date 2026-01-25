@@ -260,9 +260,11 @@ export function renderSubagentResult(
 				? theme.fg("success", "✓")
 				: theme.fg("error", "✗");
 		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
+		// Show model if available (full provider/model format)
+		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
 		const stepHeader = rRunning
-			? `${statusIcon} Step ${i + 1}: ${theme.bold(theme.fg("warning", r.agent))}${stats}`
-			: `${statusIcon} Step ${i + 1}: ${theme.bold(r.agent)}${stats}`;
+			? `${statusIcon} Step ${i + 1}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
+			: `${statusIcon} Step ${i + 1}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
 		c.addChild(new Text(stepHeader, 0, 0));
 
 		// Task (truncated)

@@ -43,7 +43,7 @@ export async function runSync(
 	task: string,
 	options: RunSyncOptions,
 ): Promise<SingleResult> {
-	const { cwd, signal, onUpdate, maxOutput, artifactsDir, artifactConfig, runId, index } = options;
+	const { cwd, signal, onUpdate, maxOutput, artifactsDir, artifactConfig, runId, index, modelOverride } = options;
 	const agent = agents.find((a) => a.name === agentName);
 	if (!agent) {
 		return {
@@ -68,7 +68,9 @@ export async function runSync(
 		} catch {}
 		args.push("--session-dir", options.sessionDir);
 	}
-	if (agent.model) args.push("--model", agent.model);
+	// Use model override if provided, otherwise use agent's default model
+	const effectiveModel = modelOverride ?? agent.model;
+	if (effectiveModel) args.push("--model", effectiveModel);
 	if (agent.tools?.length) {
 		const builtinTools: string[] = [];
 		const extensionPaths: string[] = [];
@@ -101,6 +103,7 @@ export async function runSync(
 		exitCode: 0,
 		messages: [],
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+		model: effectiveModel,  // Initialize with the model we're using
 	};
 
 	const progress: AgentProgress = {

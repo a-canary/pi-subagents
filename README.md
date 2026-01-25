@@ -50,9 +50,22 @@ npx pi-subagents --remove
 - `Esc` - Cancel
 - `↑↓` - Navigate between steps
 - `e` - Edit task/template
-- `o` - Edit output path
+- `m` - Select model (fuzzy search with all available models)
+- `t` - Select thinking level (off, minimal, low, medium, high, xhigh)
+- `w` - Edit writes (output file path)
 - `r` - Edit reads list
-- `p` - Toggle progress tracking on/off
+- `p` - Toggle progress tracking for ALL steps (chains share one progress.md)
+
+*Model selector mode:*
+- `↑↓` - Navigate model list
+- `Enter` - Select model
+- `Esc` - Cancel (keep current model)
+- Type to filter (fuzzy search by model name or provider)
+
+*Thinking level selector mode:*
+- `↑↓` - Navigate level list
+- `Enter` - Select level
+- `Esc` - Cancel (keep current level)
 
 *Edit mode (full-screen editor with word wrapping):*
 - `Esc` - Save changes and exit

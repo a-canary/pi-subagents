@@ -7,7 +7,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "./agents.js";
-import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride } from "./chain-clarify.js";
+import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride, type ModelInfo } from "./chain-clarify.js";
 import {
 	resolveChainTemplates,
 	createChainDir,
@@ -35,6 +35,28 @@ import {
 	type SingleResult,
 	MAX_CONCURRENCY,
 } from "./types.js";
+
+/** Resolve a model name to its full provider/model format */
+function resolveModelFullId(modelName: string | undefined, availableModels: ModelInfo[]): string | undefined {
+	if (!modelName) return undefined;
+	// If already in provider/model format, return as-is
+	if (modelName.includes("/")) return modelName;
+	
+	// Handle thinking level suffixes (e.g., "claude-sonnet-4-5:high")
+	// Strip the suffix for lookup, then add it back
+	const colonIdx = modelName.lastIndexOf(":");
+	const baseModel = colonIdx !== -1 ? modelName.substring(0, colonIdx) : modelName;
+	const thinkingSuffix = colonIdx !== -1 ? modelName.substring(colonIdx) : "";
+	
+	// Look up base model in available models to find provider
+	const match = availableModels.find(m => m.id === baseModel);
+	if (match) {
+		return thinkingSuffix ? `${match.fullId}${thinkingSuffix}` : match.fullId;
+	}
+	
+	// Fallback: return as-is
+	return modelName;
+}
 
 export interface ChainExecutionParams {
 	chain: ChainStep[];
@@ -110,6 +132,13 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	// Behavior overrides from TUI (set if TUI is shown, undefined otherwise)
 	let tuiBehaviorOverrides: (BehaviorOverride | undefined)[] | undefined;
 
+	// Get available models for model resolution (used in TUI and execution)
+	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
+		provider: m.provider,
+		id: m.id,
+		fullId: `${m.provider}/${m.id}`,
+	}));
+
 	if (shouldClarify) {
 		// Sequential-only chain: use existing TUI
 		const seqSteps = chainSteps as SequentialStep[];
@@ -154,6 +183,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					originalTask,
 					chainDir,
 					resolvedBehaviors,
+					availableModels,
 					done,
 				),
 			{
@@ -227,18 +257,31 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						} as SingleResult;
 					}
 
-					// Build task string
+					// Resolve behavior for this parallel task
+					const behavior = parallelBehaviors[taskIndex]!;
+
+					// Build chain instructions (prefix goes BEFORE task, suffix goes AFTER)
 					const taskTemplate = parallelTemplates[taskIndex] ?? "{previous}";
 					const templateHasPrevious = taskTemplate.includes("{previous}");
+					const { prefix, suffix } = buildChainInstructions(
+						behavior, 
+						chainDir, 
+						false, // parallel tasks don't create progress (pre-created above)
+						templateHasPrevious ? undefined : prev
+					);
+
+					// Build task string with variable substitution
 					let taskStr = taskTemplate;
 					taskStr = taskStr.replace(/\{task\}/g, originalTask);
 					taskStr = taskStr.replace(/\{previous\}/g, prev);
 					taskStr = taskStr.replace(/\{chain_dir\}/g, chainDir);
 
-					// Add chain instructions (include previous summary only if not already in template)
-					const behavior = parallelBehaviors[taskIndex]!;
-					// For parallel, no single "first progress" - each manages independently
-					taskStr += buildChainInstructions(behavior, chainDir, false, templateHasPrevious ? undefined : prev);
+					// Assemble final task: prefix (READ/WRITE instructions) + task + suffix
+					taskStr = prefix + taskStr + suffix;
+
+					// Resolve model to full provider/model format for consistent display
+					const taskAgentConfig = agents.find((a) => a.name === task.agent);
+					const effectiveModel = resolveModelFullId(taskAgentConfig?.model, availableModels);
 
 					const r = await runSync(ctx.cwd, agents, task.agent, taskStr, {
 						cwd: task.cwd ?? cwd,
@@ -249,6 +292,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						share: shareEnabled,
 						artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 						artifactConfig,
+						modelOverride: effectiveModel,
 						onUpdate: onUpdate
 							? (p) => {
 									// Use concat instead of spread for better performance
@@ -340,14 +384,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				};
 			}
 
-			// Build task string (check if template has {previous} before replacement)
-			const templateHasPrevious = stepTemplate.includes("{previous}");
-			let stepTask = stepTemplate;
-			stepTask = stepTask.replace(/\{task\}/g, originalTask);
-			stepTask = stepTask.replace(/\{previous\}/g, prev);
-			stepTask = stepTask.replace(/\{chain_dir\}/g, chainDir);
-
-			// Resolve behavior (TUI overrides take precedence over step config)
+			// Resolve behavior first (TUI overrides take precedence over step config)
 			const tuiOverride = tuiBehaviorOverrides?.[stepIndex];
 			const stepOverride: StepOverrides = {
 				output: tuiOverride?.output !== undefined ? tuiOverride.output : seqStep.output,
@@ -362,8 +399,26 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				progressCreated = true;
 			}
 
-			// Add chain instructions (include previous summary only if not already in template)
-			stepTask += buildChainInstructions(behavior, chainDir, isFirstProgress, templateHasPrevious ? undefined : prev);
+			// Build chain instructions (prefix goes BEFORE task, suffix goes AFTER)
+			const templateHasPrevious = stepTemplate.includes("{previous}");
+			const { prefix, suffix } = buildChainInstructions(
+				behavior, 
+				chainDir, 
+				isFirstProgress, 
+				templateHasPrevious ? undefined : prev
+			);
+
+			// Build task string with variable substitution
+			let stepTask = stepTemplate;
+			stepTask = stepTask.replace(/\{task\}/g, originalTask);
+			stepTask = stepTask.replace(/\{previous\}/g, prev);
+			stepTask = stepTask.replace(/\{chain_dir\}/g, chainDir);
+
+			// Assemble final task: prefix (READ/WRITE instructions) + task + suffix (progress, previous summary)
+			stepTask = prefix + stepTask + suffix;
+
+			// Resolve model: TUI override (already full format) or agent's model resolved to full format
+			const effectiveModel = tuiOverride?.model ?? resolveModelFullId(agentConfig.model, availableModels);
 
 			// Run step
 			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
@@ -375,6 +430,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				share: shareEnabled,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
+				modelOverride: effectiveModel,
 				onUpdate: onUpdate
 					? (p) => {
 							// Use concat instead of spread for better performance
@@ -399,6 +455,27 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			results.push(r);
 			if (r.progress) allProgress.push(r.progress);
 			if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
+
+			// Validate expected output file was created
+			if (behavior.output && r.exitCode === 0) {
+				try {
+					const expectedPath = behavior.output.startsWith("/") 
+						? behavior.output 
+						: path.join(chainDir, behavior.output);
+					if (!fs.existsSync(expectedPath)) {
+						// Look for similar files that might have been created instead
+						const dirFiles = fs.readdirSync(chainDir);
+						const mdFiles = dirFiles.filter(f => f.endsWith(".md") && f !== "progress.md");
+						const warning = mdFiles.length > 0 
+							? `Agent wrote to different file(s): ${mdFiles.join(", ")} instead of ${behavior.output}`
+							: `Agent did not create expected output file: ${behavior.output}`;
+						// Add warning to result but don't fail
+						r.error = r.error ? `${r.error}\n⚠️ ${warning}` : `⚠️ ${warning}`;
+					}
+				} catch {
+					// Ignore validation errors - this is just a diagnostic
+				}
+			}
 
 			// On failure, leave chain_dir for debugging
 			if (r.exitCode !== 0) {

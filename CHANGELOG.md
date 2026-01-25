@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.3.3] - 2026-01-25
+
+### Added
+- **Thinking level selector in chain TUI** - Press `[t]` to set thinking level for any step
+  - Options: off, minimal, low, medium, high, xhigh (ultrathink)
+  - Appends to model as suffix (e.g., `anthropic/claude-sonnet-4-5:high`)
+  - Pre-selects current thinking level if already set
+- **Model selector in chain TUI** - Press `[m]` to select a different model for any step
+  - Fuzzy search through all available models
+  - Shows current model with ✓ indicator
+  - Provider/model format (e.g., `anthropic/claude-haiku-4-5`)
+  - Override indicator (✎) when model differs from agent default
+- **Model visibility in chain execution** - Shows which model each step is using
+  - Display format: `Step 1: scout (claude-haiku-4-5) | 3 tools, 16.8s`
+  - Model shown in both running and completed steps
+- **Auto-propagate output changes to reads** - When you change a step's output filename,
+  downstream steps that read from it are automatically updated to use the new filename
+  - Maintains chain dependencies without manual updates
+  - Example: Change scout's output from `context.md` to `summary.md`, planner's reads updates automatically
+
+### Changed
+- **Progress is now chain-level** - `[p]` toggles progress for ALL steps at once
+  - Progress setting shown at chain level (not per-step)
+  - Chains share a single progress.md, so chain-wide toggle is more intuitive
+- **Clearer output/writes labeling** - Renamed `output:` to `writes:` to clarify it's a file
+  - Hotkey changed from `[o]` to `[w]` for consistency
+- **{previous} data flow indicator** - Shows on the PRODUCING step (not receiving):
+  - `↳ response → {previous}` appears after scout's reads line
+  - Only shows when next step's template uses `{previous}`
+  - Clearer mental model: output flows DOWN the chain
+- Chain TUI footer updated: `[e]dit [m]odel [t]hinking [w]rites [r]eads [p]rogress`
+
+### Fixed
+- **Chain READ/WRITE instructions now prepended** - Instructions restructured:
+  - `[Read from: /path/file.md]` and `[Write to: /path/file.md]` prepended BEFORE task
+  - Overrides any hardcoded filenames in task text from parent agent
+  - Previously: instructions were appended at end and could be overlooked
+- **Output file validation** - After each step, validates expected file was created:
+  - If missing, warns: "Agent wrote to different file(s): X instead of Y"
+  - Helps diagnose when agents don't create expected outputs
+- **Root cause: agents need `write` tool** - Agents without `write` in their tools list
+  cannot create output files (they tried MCP workarounds which failed)
+- **Thinking level suffixes now preserved** - Models with thinking levels (e.g., `claude-sonnet-4-5:high`)
+  now correctly resolve to `anthropic/claude-sonnet-4-5:high` instead of losing the provider prefix
+
+### Improved
+- **Per-step progress indicators** - When progress is enabled, each step shows its role:
+  - Step 1: `● creates & updates progress.md`
+  - Step 2+: `↔ reads & updates progress.md`
+  - Clear visualization of progress.md data flow through the chain
+- **Comprehensive tool descriptions** - Better documentation of chain variables:
+  - Tool description now explains `{task}`, `{previous}`, `{chain_dir}` in detail
+  - Schema descriptions clarify what each variable means and when to use them
+  - Helps agents construct proper chain queries for any use case
+
 ## [0.3.2] - 2026-01-25
 
 ### Performance

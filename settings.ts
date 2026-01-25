@@ -198,42 +198,46 @@ export function buildChainInstructions(
 	chainDir: string,
 	isFirstProgressAgent: boolean,
 	previousSummary?: string,
-): string {
-	const instructions: string[] = [];
+): { prefix: string; suffix: string } {
+	const prefixParts: string[] = [];
+	const suffixParts: string[] = [];
 
-	// Include previous step's summary if available (prose output from prior agent)
-	if (previousSummary && previousSummary.trim()) {
-		instructions.push(`Previous step summary:\n\n${previousSummary.trim()}`);
-	}
-
-	// Reads (supports both absolute and relative paths)
+	// READS - prepend to override any hardcoded filenames in task text
 	if (behavior.reads && behavior.reads.length > 0) {
-		const files = behavior.reads.map((f) => resolveChainPath(f, chainDir)).join(", ");
-		instructions.push(`Read these files: ${files}`);
+		const files = behavior.reads.map((f) => resolveChainPath(f, chainDir));
+		prefixParts.push(`[Read from: ${files.join(", ")}]`);
 	}
 
-	// Output (supports both absolute and relative paths)
+	// OUTPUT - prepend so agent knows where to write
 	if (behavior.output) {
 		const outputPath = resolveChainPath(behavior.output, chainDir);
-		instructions.push(`Write your output to: ${outputPath}`);
+		prefixParts.push(`[Write to: ${outputPath}]`);
 	}
 
-	// Progress
+	// Progress instructions in suffix (less critical)
 	if (behavior.progress) {
 		const progressPath = `${chainDir}/progress.md`;
 		if (isFirstProgressAgent) {
-			instructions.push(`Create and maintain: ${progressPath}`);
-			instructions.push("Format: Status, Tasks (checkboxes), Files Changed, Notes");
+			suffixParts.push(`Create and maintain progress at: ${progressPath}`);
 		} else {
-			instructions.push(`Read and update: ${progressPath}`);
+			suffixParts.push(`Update progress at: ${progressPath}`);
 		}
 	}
 
-	if (instructions.length === 0) return "";
+	// Include previous step's summary in suffix if available
+	if (previousSummary && previousSummary.trim()) {
+		suffixParts.push(`Previous step output:\n${previousSummary.trim()}`);
+	}
 
-	return (
-		"\n\n---\n**Chain Instructions:**\n" + instructions.map((i) => `- ${i}`).join("\n")
-	);
+	const prefix = prefixParts.length > 0 
+		? prefixParts.join("\n") + "\n\n"
+		: "";
+	
+	const suffix = suffixParts.length > 0
+		? "\n\n---\n" + suffixParts.join("\n")
+		: "";
+
+	return { prefix, suffix };
 }
 
 // =============================================================================

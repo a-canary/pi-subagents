@@ -144,9 +144,20 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		label: "Subagent",
 		description: `Delegate to subagents. Use exactly ONE mode:
 • SINGLE: { agent, task } - one task
-• CHAIN: { chain: [{agent:"scout"}, {agent:"planner"}] } - sequential, {previous} passes output
-• PARALLEL: { tasks: [{agent,task}, ...] } - concurrent
-For "scout → planner" or multi-step flows, use chain (not multiple single calls).`,
+• CHAIN: { chain: [{agent:"scout"}, {agent:"planner"}] } - sequential pipeline
+• PARALLEL: { tasks: [{agent,task}, ...] } - concurrent execution
+
+CHAIN TEMPLATE VARIABLES (use in task strings):
+• {task} - The original task/request from the user
+• {previous} - Text response from the previous step (empty for first step)
+• {chain_dir} - Shared directory for chain files (e.g., /tmp/pi-chain-runs/abc123/)
+
+CHAIN DATA FLOW:
+1. Each step's text response automatically becomes {previous} for the next step
+2. Steps can also write files to {chain_dir} (via agent's "output" config)
+3. Later steps can read those files (via agent's "reads" config)
+
+Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }`,
 		parameters: SubagentParams,
 
 		async execute(_id, params, onUpdate, ctx, signal) {

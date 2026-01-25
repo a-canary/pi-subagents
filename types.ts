@@ -193,6 +193,8 @@ export interface RunSyncOptions {
 	index?: number;
 	sessionDir?: string;
 	share?: boolean;
+	/** Override the agent's default model (format: "provider/id" or just "id") */
+	modelOverride?: string;
 }
 
 export interface ExtensionConfig {
