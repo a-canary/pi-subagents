@@ -135,10 +135,12 @@ export async function runSync(
 		// Throttled update mechanism - consolidates all updates
 		let lastUpdateTime = 0;
 		let updatePending = false;
+		let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+		let processClosed = false;
 		const UPDATE_THROTTLE_MS = 50; // Reduced from 75ms for faster responsiveness
 
 		const scheduleUpdate = () => {
-			if (!onUpdate) return;
+			if (!onUpdate || processClosed) return;
 			const now = Date.now();
 			const elapsed = now - lastUpdateTime;
 
@@ -154,8 +156,9 @@ export async function runSync(
 			} else if (!updatePending) {
 				// Schedule update for later
 				updatePending = true;
-				setTimeout(() => {
-					if (updatePending) {
+				pendingTimer = setTimeout(() => {
+					pendingTimer = null;
+					if (updatePending && !processClosed) {
 						updatePending = false;
 						lastUpdateTime = Date.now();
 						progress.durationMs = Date.now() - startTime;
@@ -223,8 +226,11 @@ export async function runSync(
 								.split("\n")
 								.filter((l) => l.trim())
 								.slice(-10);
-							// Append to existing recentOutput (keep last 50 total)
-							progress.recentOutput = [...progress.recentOutput, ...lines].slice(-50);
+							// Append to existing recentOutput (keep last 50 total) - mutate in place for efficiency
+							progress.recentOutput.push(...lines);
+							if (progress.recentOutput.length > 50) {
+								progress.recentOutput.splice(0, progress.recentOutput.length - 50);
+							}
 						}
 					}
 					scheduleUpdate();
@@ -238,8 +244,11 @@ export async function runSync(
 							.split("\n")
 							.filter((l) => l.trim())
 							.slice(-10);
-						// Append to existing recentOutput (keep last 50 total)
-						progress.recentOutput = [...progress.recentOutput, ...toolLines].slice(-50);
+						// Append to existing recentOutput (keep last 50 total) - mutate in place for efficiency
+						progress.recentOutput.push(...toolLines);
+						if (progress.recentOutput.length > 50) {
+							progress.recentOutput.splice(0, progress.recentOutput.length - 50);
+						}
 					}
 					scheduleUpdate();
 				}
@@ -261,6 +270,11 @@ export async function runSync(
 			stderrBuf += d.toString();
 		});
 		proc.on("close", (code) => {
+			processClosed = true;
+			if (pendingTimer) {
+				clearTimeout(pendingTimer);
+				pendingTimer = null;
+			}
 			if (buf.trim()) processLine(buf);
 			if (code !== 0 && stderrBuf.trim() && !result.error) {
 				result.error = stderrBuf.trim();

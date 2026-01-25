@@ -92,8 +92,9 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
  * Get human-readable last activity time for a file
  */
 export function getLastActivity(outputFile: string | undefined): string {
-	if (!outputFile || !fs.existsSync(outputFile)) return "";
+	if (!outputFile) return "";
 	try {
+		// Single stat call - throws if file doesn't exist
 		const stat = fs.statSync(outputFile);
 		const ago = Date.now() - stat.mtimeMs;
 		if (ago < 1000) return "active now";

@@ -42,8 +42,10 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	}
 
 	// Check if anything changed since last render
+	// Always re-render if any job is running (output tail updates constantly)
+	const hasRunningJobs = jobs.some(job => job.status === "running");
 	const newHash = computeWidgetHash(jobs);
-	if (newHash === lastWidgetHash) {
+	if (!hasRunningJobs && newHash === lastWidgetHash) {
 		return; // Skip re-render, nothing changed
 	}
 	lastWidgetHash = newHash;
