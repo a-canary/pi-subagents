@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Added `pi-package` keyword for npm discoverability (pi v0.50.0 package system)
+
+## [0.4.0] - 2026-01-25
+
+### Added
+- **Clarify TUI for single and parallel modes** - Use `clarify: true` to preview/edit before execution
+  - Single mode: Edit task, model, thinking level, output file
+  - Parallel mode: Edit each task independently, model, thinking level
+  - Navigate between parallel tasks with ↑↓
+- **Mode-aware TUI headers** - Header shows "Agent: X" for single, "Parallel Tasks (N)" for parallel, "Chain: X → Y" for chains
+- **Model override for single/parallel** - TUI model selection now works for all modes
+
+### Fixed
+- **MAX_PARALLEL error mode** - Now correctly returns `mode: 'parallel'` (was incorrectly `mode: 'single'`)
+- **`output: true` handling** - Now correctly treats `true` as "use agent's default output" instead of creating a file literally named "true"
+
+### Changed
+- **Schema description** - `clarify` parameter now documents all modes: "default: true for chains, false for single/parallel"
+
 ## [0.3.3] - 2026-01-25
 
 ### Added
