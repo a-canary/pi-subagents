@@ -11,10 +11,10 @@ https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 ## Installation
 
 ```bash
-npx pi-subagents
+pi install npm:pi-subagents
 ```
 
-This clones the extension to `~/.pi/agent/extensions/subagent/`. To update, run the same command. To remove:
+To remove:
 
 ```bash
 npx pi-subagents --remove
