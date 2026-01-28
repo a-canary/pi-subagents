@@ -4,11 +4,8 @@
 
 import { Type } from "@sinclair/typebox";
 
-const SkillOverride = Type.Union([
-	Type.String({ description: "Skill name(s) to inject (comma-separated)" }),
-	Type.Array(Type.String()),
-	Type.Boolean({ description: "false disables skills, true uses default" }),
-]);
+// Note: Using Type.Any() for Google API compatibility (doesn't support anyOf)
+const SkillOverride = Type.Any({ description: "Skill name(s) to inject (comma-separated), array of strings, or boolean (false disables, true uses default)" });
 
 export const TaskItem = Type.Object({ 
 	agent: Type.String(), 
@@ -25,14 +22,8 @@ export const SequentialStepSchema = Type.Object({
 	})),
 	cwd: Type.Optional(Type.String()),
 	// Chain behavior overrides
-	output: Type.Optional(Type.Union([
-		Type.String(),
-		Type.Boolean(),
-	], { description: "Output filename to write in {chain_dir} (string), or false to disable file output" })),
-	reads: Type.Optional(Type.Union([
-		Type.Array(Type.String()),
-		Type.Boolean(),
-	], { description: "Files to read from {chain_dir} before running (array of filenames), or false to disable" })),
+	output: Type.Optional(Type.Any({ description: "Output filename to write in {chain_dir} (string), or false to disable file output" })),
+	reads: Type.Optional(Type.Any({ description: "Files to read from {chain_dir} before running (array of filenames), or false to disable" })),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 });
@@ -42,14 +33,8 @@ export const ParallelTaskSchema = Type.Object({
 	agent: Type.String(),
 	task: Type.Optional(Type.String({ description: "Task template with {task}, {previous}, {chain_dir} variables. Defaults to {previous}." })),
 	cwd: Type.Optional(Type.String()),
-	output: Type.Optional(Type.Union([
-		Type.String(),
-		Type.Boolean(),
-	], { description: "Output filename to write in {chain_dir} (string), or false to disable file output" })),
-	reads: Type.Optional(Type.Union([
-		Type.Array(Type.String()),
-		Type.Boolean(),
-	], { description: "Files to read from {chain_dir} before running (array of filenames), or false to disable" })),
+	output: Type.Optional(Type.Any({ description: "Output filename to write in {chain_dir} (string), or false to disable file output" })),
+	reads: Type.Optional(Type.Any({ description: "Files to read from {chain_dir} before running (array of filenames), or false to disable" })),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 });
@@ -62,7 +47,8 @@ export const ParallelStepSchema = Type.Object({
 });
 
 // Chain item can be either sequential or parallel
-export const ChainItem = Type.Union([SequentialStepSchema, ParallelStepSchema]);
+// Note: Using Type.Any() for Google API compatibility (doesn't support anyOf)
+export const ChainItem = Type.Any({ description: "Chain step: either {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
 
 export const MaxOutputSchema = Type.Optional(
 	Type.Object({
@@ -89,10 +75,7 @@ export const SubagentParams = Type.Object({
 	// Clarification TUI
 	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: true for chains, false for single/parallel). Implies sync mode." })),
 	// Solo agent output override
-	output: Type.Optional(Type.Union([
-		Type.String(),
-		Type.Boolean(),
-	], { description: "Override output file for single agent (string), or false to disable (uses agent default if omitted)" })),
+	output: Type.Optional(Type.Any({ description: "Override output file for single agent (string), or false to disable (uses agent default if omitted)" })),
 	skill: Type.Optional(SkillOverride),
 });
 
