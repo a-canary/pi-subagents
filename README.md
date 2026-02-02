@@ -39,7 +39,7 @@ Use `agentScope` parameter to control discovery: `"user"` (default), `"project"`
 ---
 name: scout
 description: Fast codebase recon
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, mcp:chrome-devtools
 model: claude-haiku-4-5
 skill: safe-bash, chrome-devtools  # comma-separated skills to inject
 output: context.md           # writes to {chain_dir}/context.md
