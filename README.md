@@ -51,6 +51,29 @@ interactive: true            # (parsed but not enforced in v1)
 Your system prompt goes here (the markdown body after frontmatter).
 ```
 
+**MCP Tools**
+
+Agents can use MCP server tools directly (requires the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension). Add `mcp:` prefixed entries to the `tools` field:
+
+```yaml
+# All tools from a server
+tools: read, bash, mcp:chrome-devtools
+
+# Specific tools from a server
+tools: read, bash, mcp:github/search_repositories, mcp:github/get_file_contents
+```
+
+| Syntax | Effect |
+|--------|--------|
+| `mcp:server-name` | All tools from that MCP server |
+| `mcp:server-name/tool_name` | One specific tool |
+
+The `mcp:` items are additive — they don't affect which builtins the agent gets. `tools: mcp:chrome-devtools` (with no regular tools listed) gives the agent all default builtins plus chrome-devtools tools. To restrict builtins, list them explicitly: `tools: read, bash, mcp:chrome-devtools`.
+
+Subagents only get direct MCP tools when `mcp:` items are explicitly listed. Even if your `mcp.json` has `directTools: true` globally, a subagent without `mcp:` in its frontmatter won't get any direct tools — keeping it lean. The `mcp` proxy tool is still available for discovery if needed.
+
+The MCP adapter's metadata cache must be populated for direct tools to work. On the first session with a new MCP server, tools will only be available through the `mcp` proxy. Restart Pi after the first session and direct tools become available.
+
 **Resolution priority:** step override > agent frontmatter > disabled
 
 ## Features (beyond base)

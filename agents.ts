@@ -12,6 +12,7 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
+	mcpDirectTools?: string[];
 	model?: string;
 	systemPrompt: string;
 	source: "user" | "project";
@@ -91,10 +92,22 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			continue;
 		}
 
-		const tools = frontmatter.tools
+		const rawTools = frontmatter.tools
 			?.split(",")
 			.map((t) => t.trim())
 			.filter(Boolean);
+
+		const mcpDirectTools: string[] = [];
+		const tools: string[] = [];
+		if (rawTools) {
+			for (const tool of rawTools) {
+				if (tool.startsWith("mcp:")) {
+					mcpDirectTools.push(tool.slice(4));
+				} else {
+					tools.push(tool);
+				}
+			}
+		}
 
 		// Parse defaultReads as comma-separated list (like tools)
 		const defaultReads = frontmatter.defaultReads
@@ -111,7 +124,8 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
-			tools: tools && tools.length > 0 ? tools : undefined,
+			tools: tools.length > 0 ? tools : undefined,
+			mcpDirectTools: mcpDirectTools.length > 0 ? mcpDirectTools : undefined,
 			model: frontmatter.model,
 			systemPrompt: body,
 			source,

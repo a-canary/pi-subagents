@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0] - 2026-02-02
+
+### Added
+- **MCP direct tools for subagents** - Agents can request specific MCP tools as first-class tools via `mcp:` prefix in frontmatter: `tools: read, bash, mcp:chrome-devtools` or `tools: read, bash, mcp:github/search_repositories`. Requires pi-mcp-adapter.
+- **`MCP_DIRECT_TOOLS` env var** - Subagent processes receive their direct tool config via environment variable. Agents without `mcp:` items get a `__none__` sentinel to prevent config leaking from the parent process.
 
 ## [0.5.3] - 2026-02-01
 

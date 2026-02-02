@@ -144,8 +144,16 @@ export async function runSync(
 		}
 	}
 
+	const spawnEnv = { ...process.env };
+	const mcpDirect = agent.mcpDirectTools;
+	if (mcpDirect?.length) {
+		spawnEnv.MCP_DIRECT_TOOLS = mcpDirect.join(",");
+	} else {
+		spawnEnv.MCP_DIRECT_TOOLS = "__none__";
+	}
+
 	const exitCode = await new Promise<number>((resolve) => {
-		const proc = spawn("pi", args, { cwd: cwd ?? runtimeCwd, stdio: ["ignore", "pipe", "pipe"] });
+		const proc = spawn("pi", args, { cwd: cwd ?? runtimeCwd, env: spawnEnv, stdio: ["ignore", "pipe", "pipe"] });
 		let buf = "";
 
 		// Throttled update mechanism - consolidates all updates
