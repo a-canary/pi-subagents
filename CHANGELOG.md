@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-02-01
+
+### Fixed
+- Adapt execute signatures to pi v0.51.0: reorder signal, onUpdate, ctx parameters for subagent tool; add missing parameters to subagent_status tool
+
 ## [0.5.2] - 2026-01-28
 
 ### Improved
