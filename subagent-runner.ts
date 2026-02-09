@@ -19,6 +19,7 @@ interface SubagentStep {
 	cwd?: string;
 	model?: string;
 	tools?: string[];
+	mcpDirectTools?: string[];
 	systemPrompt?: string | null;
 	skills?: string[];
 }
@@ -97,10 +98,12 @@ function runPiStreaming(
 	args: string[],
 	cwd: string,
 	outputFile: string,
+	env?: Record<string, string | undefined>,
 ): Promise<{ stdout: string; exitCode: number | null }> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
-		const child = spawn("pi", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		const spawnEnv = env ? { ...process.env, ...env } : undefined;
+		const child = spawn("pi", args, { cwd, stdio: ["ignore", "pipe", "pipe"], ...(spawnEnv && { env: spawnEnv }) });
 		let stdout = "";
 
 		child.stdout.on("data", (chunk: Buffer) => {
@@ -371,7 +374,14 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 		}
 
-		const result = await runPiStreaming(args, step.cwd ?? cwd, outputFile);
+		const mcpEnv: Record<string, string | undefined> = {};
+		if (step.mcpDirectTools?.length) {
+			mcpEnv.MCP_DIRECT_TOOLS = step.mcpDirectTools.join(",");
+		} else {
+			mcpEnv.MCP_DIRECT_TOOLS = "__none__";
+		}
+
+		const result = await runPiStreaming(args, step.cwd ?? cwd, outputFile, mcpEnv);
 
 		if (tmpDir) {
 			try {

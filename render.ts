@@ -187,7 +187,7 @@ export function renderSubagentResult(
 			? ` | ${totalSummary.toolCount} tools, ${formatTokens(totalSummary.tokens)} tok, ${formatDuration(totalSummary.durationMs)}`
 			: "";
 
-	const modeLabel = d.mode === "parallel" ? "parallel (no live progress)" : d.mode;
+	const modeLabel = d.mode;
 	// For parallel-in-chain, show task count (results) for consistency with step display
 	// For sequential chains, show logical step count
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));

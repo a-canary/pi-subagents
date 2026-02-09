@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.7.0] - 2026-02-09
+
+### Added
+- **Agents Manager overlay** — browse, view, edit, create, and delete agent definitions from a TUI opened via `Ctrl+Shift+A` or the `/agents` command
+  - List screen with search/filter, scope badges (user/project), chain badges
+  - Detail screen showing resolved prompt, recent runs, all frontmatter fields
+  - Edit screen with field-by-field editing, model picker, skill picker, thinking picker, full-screen prompt editor
+  - Create from templates (Blank, Scout, Planner, Implementer, Code Reviewer, Blank Chain)
+  - Delete with confirmation
+  - Launch directly from overlay with task input and skip-clarify toggle (`Tab`)
+- **Chain files** — `.chain.md` files define reusable multi-step chains with YAML-style frontmatter per step, stored alongside agent `.md` files
+  - Chain serializer with round-trip parse/serialize fidelity
+  - Three-state config semantics: `undefined` (inherit), value (override), `false` (disable)
+  - Chain detail screen with flow visualization and dependency map
+  - Chain edit screen (raw file editing)
+  - Create new chains from the template picker or save from the chain-clarify TUI (`W`)
+- **Save overrides from clarify TUI** — press `S` to persist model/output/reads/skills/progress overrides back to the agent's frontmatter file, or `W` (chain mode) to save the full chain configuration as a `.chain.md` file
+- **Multi-select and parallel from overlay** — select agents with `Tab`, then `Ctrl+R` for sequential chain or `Ctrl+P` to open the parallel builder
+  - Parallel builder: add same agent multiple times, set per-slot task overrides, shared task input
+  - Progressive footer: 0 selected (default hints), 1 selected (`[ctrl+r] run [ctrl+p] parallel`), 2+ selected (`[ctrl+r] chain [ctrl+p] parallel`)
+  - Selection count indicator in footer
+- **Slash commands with per-step tasks** — `/run`, `/chain`, and `/parallel` execute subagents with full live progress rendering and tab-completion. Results are sent to the conversation for the LLM to discuss.
+  - Per-step tasks with quotes: `/chain scout "scan code" -> planner "analyze auth"`
+  - Per-step tasks for parallel: `/parallel scanner "find bugs" -> reviewer "check style"`
+  - `--` delimiter also supported: `/chain scout -- scan code -> planner -- analyze auth`
+  - Shared task (no `->`): `/chain scout planner -- shared task`
+  - Tab completion for agent names, aware of task sections (quotes and `--`)
+  - Inline per-step config: `/chain scout[output=ctx.md] "scan code" -> planner[reads=ctx.md] "analyze auth"`
+  - Supported keys: `output`, `reads` (`+` separates files), `model`, `skills`, `progress`
+  - Works on all three commands: `/run agent[key=val]`, `/chain`, `/parallel`
+- **Run history** — per-agent JSONL recording of task, exit code, duration, timestamp
+  - Recent runs shown on agent detail screen (last 5)
+  - Lazy JSONL rotation (keeps last 1000 entries)
+- **Thinking level as first-class agent field** — `thinking` frontmatter field (off, minimal, low, medium, high, xhigh) editable in the Agents Manager
+  - Picker with arrow key navigation and level descriptions
+  - At runtime, appended as `:level` suffix to the model string
+  - Existing suffix detection prevents double-application
+  - Displayed on agent detail screen
+
+### Fixed
+- **Parallel live progress** — top-level parallel execution (`tasks: [...]`) now shows live progress for all concurrent tasks. Each task's `onUpdate` updates its slot in a shared array and emits a merged view, so the renderer can display per-task status, current tools, recent output, and timing in real time. Previously only showed results after all tasks completed.
+- **Slash commands frozen with no progress** — `/run`, `/chain`, and `/parallel` called `runSync`/`executeChain` directly, bypassing the tool framework. No `onUpdate` meant zero live progress, and `await`-ing execution blocked the command handler, making inputs unresponsive. Now all three route through `sendToolCall` → LLM → tool handler, getting full live progress rendering and responsive input for free.
+- **`/run` model override silently dropped** — `/run scout[model=gpt-4o] task` now correctly passes the model through to the tool handler. Added `model` field to the tool schema for single-agent runs.
+- **Quoted tasks with `--` inside split incorrectly** — the segment parser now checks for quoted strings before the `--` delimiter, so tasks like `scout "analyze login -- flow"` parse correctly instead of splitting on the embedded ` -- `.
+- **Chain first-step validation in per-step mode** — `/chain scout -> planner "task"` now correctly errors instead of silently assigning planner's task to scout. The first step must have its own task when using `->` syntax.
+- **Thinking level ignored in async mode** — `async-execution.ts` now applies thinking suffix to the model string before serializing to the runner, matching sync behavior
+- **Step-level model override ignored in async mode** — `executeAsyncChain` now uses `step.model ?? agent.model` as the base for thinking suffix, matching the sync path in `chain-execution.ts`
+- **mcpDirectTools not set in async mode** — `subagent-runner.ts` now sets `MCP_DIRECT_TOOLS` env var per step, matching the sync path in `execution.ts`
+- **`{task}` double-corruption in saved chain launches** — stopped pre-replacing `{task}` in the overlay launch path; raw user task passed as top-level param to `executeChain()`, which uses `params.task` for `originalTask`
+- **Agent serializer `skill` normalization** — `normalizedField` now maps `"skill"` to `"skills"` on the write path
+- **Clarify toggle determinism** — all four ManagerResult paths (single, chain, saved chain, parallel) now use deterministic JSON with `clarify: !result.skipClarify`, eliminating silent breakage from natural language variants
+
+### Changed
+- Agents Manager single-agent and saved-chain launches default to quick run (skip clarify TUI) — the user already reviewed config in the overlay. Multi-agent ad-hoc chains default to showing the clarify TUI so users can configure per-step tasks, models, output files, and skills before execution. Toggle with `Tab` in the task-input screen.
+- Extracted `applyThinkingSuffix(model, thinking)` helper from inline logic in `execution.ts`, shared with `async-execution.ts`
+- Text editor: added word navigation (Alt+Left/Right, Ctrl+Left/Right), word delete (Alt+Backspace), paste support
+- Agent discovery (`agents.ts`): loads `.chain.md` files via `loadChainsFromDir`, exposes `discoverAgentsAll` for overlay
+
 ## [0.6.0] - 2026-02-02
 
 ### Added

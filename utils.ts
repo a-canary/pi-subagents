@@ -113,7 +113,7 @@ export function findByPrefix(dir: string, prefix: string, suffix?: string): stri
 	const entries = fs.readdirSync(dir).filter((entry) => entry.startsWith(prefix));
 	if (suffix) {
 		const withSuffix = entries.filter((entry) => entry.endsWith(suffix));
-		if (withSuffix.length > 0) return path.join(dir, withSuffix.sort()[0]);
+		return withSuffix.length > 0 ? path.join(dir, withSuffix.sort()[0]) : null;
 	}
 	if (entries.length === 0) return null;
 	return path.join(dir, entries.sort()[0]);
@@ -129,7 +129,6 @@ export function findLatestSessionFile(sessionDir: string): string | null {
 		.map((f) => {
 			const filePath = path.join(sessionDir, f);
 			return {
-				name: f,
 				path: filePath,
 				mtime: fs.statSync(filePath).mtimeMs,
 			};
@@ -184,11 +183,25 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 }
 
 /**
- * Detect errors in subagent execution from messages
+ * Detect errors in subagent execution from messages (only errors with no subsequent success)
  */
 export function detectSubagentError(messages: Message[]): ErrorInfo {
-	for (const msg of messages) {
-		if (msg.role === "toolResult" && (msg as any).isError) {
+	let lastSuccessfulToolIndex = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role === "toolResult" && !(msg as any).isError) {
+			lastSuccessfulToolIndex = i;
+			break;
+		}
+	}
+
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (i < lastSuccessfulToolIndex) break;
+
+		const msg = messages[i];
+		if (msg.role !== "toolResult") continue;
+
+		if ((msg as any).isError) {
 			const text = msg.content.find((c) => c.type === "text");
 			const details = text && "text" in text ? text.text : undefined;
 			const exitMatch = details?.match(/exit(?:ed)?\s*(?:with\s*)?(?:code|status)?\s*[:\s]?\s*(\d+)/i);
@@ -199,10 +212,7 @@ export function detectSubagentError(messages: Message[]): ErrorInfo {
 				details: details?.slice(0, 200),
 			};
 		}
-	}
 
-	for (const msg of messages) {
-		if (msg.role !== "toolResult") continue;
 		const toolName = (msg as any).toolName;
 		if (toolName !== "bash") continue;
 
@@ -218,7 +228,7 @@ export function detectSubagentError(messages: Message[]): ErrorInfo {
 			}
 		}
 
-		const errorPatterns = [
+		const fatalPatterns = [
 			/command not found/i,
 			/permission denied/i,
 			/no such file or directory/i,
@@ -228,7 +238,7 @@ export function detectSubagentError(messages: Message[]): ErrorInfo {
 			/connection refused/i,
 			/timeout/i,
 		];
-		for (const pattern of errorPatterns) {
+		for (const pattern of fatalPatterns) {
 			if (pattern.test(output)) {
 				return { hasError: true, exitCode: 1, errorType: "bash", details: output.slice(0, 200) };
 			}

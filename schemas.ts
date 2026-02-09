@@ -21,11 +21,11 @@ export const SequentialStepSchema = Type.Object({
 		description: "Task template with variables: {task}=original request, {previous}=prior step's text response, {chain_dir}=shared folder. Required for first step, defaults to '{previous}' for subsequent steps." 
 	})),
 	cwd: Type.Optional(Type.String()),
-	// Chain behavior overrides
 	output: Type.Optional(Type.Any({ description: "Output filename to write in {chain_dir} (string), or false to disable file output" })),
 	reads: Type.Optional(Type.Any({ description: "Files to read from {chain_dir} before running (array of filenames), or false to disable" })),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
+	model: Type.Optional(Type.String({ description: "Override model for this step" })),
 });
 
 // Parallel task item (within a parallel step)
@@ -37,6 +37,7 @@ export const ParallelTaskSchema = Type.Object({
 	reads: Type.Optional(Type.Any({ description: "Files to read from {chain_dir} before running (array of filenames), or false to disable" })),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
+	model: Type.Optional(Type.String({ description: "Override model for this task" })),
 });
 
 // Parallel chain step (multiple agents running concurrently)
@@ -74,9 +75,10 @@ export const SubagentParams = Type.Object({
 	),
 	// Clarification TUI
 	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: true for chains, false for single/parallel). Implies sync mode." })),
-	// Solo agent output override
+	// Solo agent overrides
 	output: Type.Optional(Type.Any({ description: "Override output file for single agent (string), or false to disable (uses agent default if omitted)" })),
 	skill: Type.Optional(SkillOverride),
+	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
 });
 
 export const StatusParams = Type.Object({

@@ -28,6 +28,7 @@ import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
 import { runSync } from "./execution.js";
 import { buildChainSummary } from "./formatters.js";
 import { getFinalOutput, mapConcurrent } from "./utils.js";
+import { recordRun } from "./run-history.js";
 import {
 	type AgentProgress,
 	type ArtifactConfig,
@@ -61,6 +62,7 @@ function resolveModelFullId(modelName: string | undefined, availableModels: Mode
 
 export interface ChainExecutionParams {
 	chain: ChainStep[];
+	task?: string;
 	agents: AgentConfig[];
 	ctx: ExtensionContext;
 	signal?: AbortSignal;
@@ -115,11 +117,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	);
 	const totalSteps = chainSteps.length;
 
-	// Get original task from first step
+	// Get original task from params or first step
 	const firstStep = chainSteps[0]!;
-	const originalTask = isParallelStep(firstStep)
-		? firstStep.parallel[0]!.task!
-		: (firstStep as SequentialStep).task!;
+	const originalTask = params.task
+		?? (isParallelStep(firstStep) ? firstStep.parallel[0]!.task! : (firstStep as SequentialStep).task!);
 
 	// Create chain directory
 	const chainDir = createChainDir(runId);
@@ -169,6 +170,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			reads: step.reads,
 			progress: step.progress,
 			skills: normalizeSkillInput(step.skill),
+			model: step.model,
 		}));
 
 		// Pre-resolve behaviors for TUI display
@@ -282,13 +284,16 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					taskStr = taskStr.replace(/\{task\}/g, originalTask);
 					taskStr = taskStr.replace(/\{previous\}/g, prev);
 					taskStr = taskStr.replace(/\{chain_dir\}/g, chainDir);
+					const cleanTask = taskStr;
 
 					// Assemble final task: prefix (READ/WRITE instructions) + task + suffix
 					taskStr = prefix + taskStr + suffix;
 
 					// Resolve model to full provider/model format for consistent display
 					const taskAgentConfig = agents.find((a) => a.name === task.agent);
-					const effectiveModel = resolveModelFullId(taskAgentConfig?.model, availableModels);
+					const effectiveModel =
+						(task.model ? resolveModelFullId(task.model, availableModels) : null)
+						?? resolveModelFullId(taskAgentConfig?.model, availableModels);
 
 					const r = await runSync(ctx.cwd, agents, task.agent, taskStr, {
 						cwd: task.cwd ?? cwd,
@@ -324,6 +329,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					if (r.exitCode !== 0 && failFast) {
 						aborted = true;
 					}
+					recordRun(task.agent, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);
 
 					return r;
 				},
@@ -425,12 +431,16 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			stepTask = stepTask.replace(/\{task\}/g, originalTask);
 			stepTask = stepTask.replace(/\{previous\}/g, prev);
 			stepTask = stepTask.replace(/\{chain_dir\}/g, chainDir);
+			const cleanTask = stepTask;
 
 			// Assemble final task: prefix (READ/WRITE instructions) + task + suffix (progress, previous summary)
 			stepTask = prefix + stepTask + suffix;
 
 			// Resolve model: TUI override (already full format) or agent's model resolved to full format
-			const effectiveModel = tuiOverride?.model ?? resolveModelFullId(agentConfig.model, availableModels);
+			const effectiveModel =
+				tuiOverride?.model
+				?? (seqStep.model ? resolveModelFullId(seqStep.model, availableModels) : null)
+				?? resolveModelFullId(agentConfig.model, availableModels);
 
 			// Run step
 			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
@@ -463,6 +473,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						}
 					: undefined,
 			});
+			recordRun(seqStep.agent, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);
 
 			globalTaskIndex++;
 			results.push(r);

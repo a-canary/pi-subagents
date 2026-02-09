@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { type AgentConfig, type AgentScope, discoverAgents, discoverAgentsAll } from "./agents.js";
 import { cleanupOldChainDirs, getStepAgents, isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep } from "./settings.js";
 import { ChainClarifyComponent, type ChainClarifyResult, type ModelInfo } from "./chain-clarify.js";
 import { cleanupOldArtifacts, getArtifactsDir } from "./artifacts.js";
@@ -39,7 +39,6 @@ import {
 	RESULTS_DIR,
 	WIDGET_KEY,
 } from "./types.js";
-import { formatDuration } from "./formatters.js";
 import { readStatus, findByPrefix, getFinalOutput, mapConcurrent } from "./utils.js";
 import { runSync } from "./execution.js";
 import { renderWidget, renderSubagentResult } from "./render.js";
@@ -47,6 +46,8 @@ import { SubagentParams, StatusParams } from "./schemas.js";
 import { executeChain } from "./chain-execution.js";
 import { isAsyncAvailable, executeAsyncChain, executeAsyncSingle } from "./async-execution.js";
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
+import { AgentManagerComponent, type ManagerResult } from "./agent-manager.js";
+import { recordRun } from "./run-history.js";
 
 // ExtensionConfig is now imported from ./types.js
 
@@ -242,7 +243,7 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 							details: { mode: "chain" as const, results: [] },
 						};
 					}
-				} else if (!(firstStep as SequentialStep).task) {
+				} else if (!(firstStep as SequentialStep).task && !params.task) {
 					return {
 						content: [{ type: "text", text: "First step in chain must have a task" }],
 						isError: true,
@@ -340,6 +341,7 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 				// Use extracted chain execution module
 				return executeChain({
 					chain: params.chain as ChainStep[],
+					task: params.task,
 					agents,
 					ctx,
 					signal,
@@ -434,6 +436,8 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 
 				// Execute with overrides (tasks array has same length as params.tasks)
 				const behaviors = agentConfigs.map(c => resolveStepBehavior(c, {}));
+				const liveResults: (SingleResult | undefined)[] = new Array(params.tasks.length).fill(undefined);
+				const liveProgress: (AgentProgress | undefined)[] = new Array(params.tasks.length).fill(undefined);
 				const results = await mapConcurrent(params.tasks, MAX_CONCURRENCY, async (t, i) => {
 					const overrideSkills = skillOverrides[i];
 					const effectiveSkills = overrideSkills === undefined ? behaviors[i]?.skills : overrideSkills;
@@ -449,8 +453,31 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 						maxOutput: params.maxOutput,
 						modelOverride: modelOverrides[i],
 						skills: effectiveSkills === false ? [] : effectiveSkills,
+						onUpdate: onUpdate
+							? (p) => {
+									const stepResults = p.details?.results || [];
+									const stepProgress = p.details?.progress || [];
+									if (stepResults.length > 0) liveResults[i] = stepResults[0];
+									if (stepProgress.length > 0) liveProgress[i] = stepProgress[0];
+									const mergedResults = liveResults.filter((r): r is SingleResult => r !== undefined);
+									const mergedProgress = liveProgress.filter((pg): pg is AgentProgress => pg !== undefined);
+									onUpdate({
+										content: p.content,
+										details: {
+											mode: "parallel",
+											results: mergedResults,
+											progress: mergedProgress,
+											totalSteps: params.tasks!.length,
+										},
+									});
+								}
+							: undefined,
 					});
 				});
+				for (let i = 0; i < results.length; i++) {
+					const run = results[i]!;
+					recordRun(run.agent, tasks[i]!, run.exitCode, run.progressSummary?.durationMs ?? 0);
+				}
 
 				for (const r of results) {
 					if (r.progress) allProgress.push(r.progress);
@@ -482,7 +509,7 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 				}
 
 				let task = params.task!;
-				let modelOverride: string | undefined;
+				let modelOverride: string | undefined = params.model as string | undefined;
 				let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 				// Normalize output: true means "use default" (same as undefined), false means disable
 				const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
@@ -530,6 +557,7 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 				}
 
 				// Compute output path at runtime (uses effectiveOutput which may be TUI-modified)
+				const cleanTask = task;
 				let outputPath: string | undefined;
 				if (typeof effectiveOutput === 'string' && effectiveOutput) {
 					const outputDir = `/tmp/pi-${agentConfig.name}-${runId}`;
@@ -559,6 +587,7 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 					modelOverride,
 					skills: effectiveSkills,
 				});
+				recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);
 
 				if (r.progress) allProgress.push(r.progress);
 				if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
@@ -715,6 +744,282 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 
 	pi.registerTool(tool);
 	pi.registerTool(statusTool);
+
+	interface InlineConfig {
+		output?: string | false;
+		reads?: string[] | false;
+		model?: string;
+		skill?: string[] | false;
+		progress?: boolean;
+	}
+
+	const parseInlineConfig = (raw: string): InlineConfig => {
+		const config: InlineConfig = {};
+		for (const part of raw.split(",")) {
+			const trimmed = part.trim();
+			if (!trimmed) continue;
+			const eq = trimmed.indexOf("=");
+			if (eq === -1) {
+				if (trimmed === "progress") config.progress = true;
+				continue;
+			}
+			const key = trimmed.slice(0, eq).trim();
+			const val = trimmed.slice(eq + 1).trim();
+			switch (key) {
+				case "output": config.output = val === "false" ? false : val; break;
+				case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
+				case "model": config.model = val || undefined; break;
+				case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
+				case "progress": config.progress = val !== "false"; break;
+			}
+		}
+		return config;
+	};
+
+	const parseAgentToken = (token: string): { name: string; config: InlineConfig } => {
+		const bracket = token.indexOf("[");
+		if (bracket === -1) return { name: token, config: {} };
+		const end = token.lastIndexOf("]");
+		return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
+	};
+
+	const setupDirectRun = (ctx: ExtensionContext) => {
+		const runId = randomUUID().slice(0, 8);
+		const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
+		return {
+			runId,
+			shareEnabled: true,
+			sessionDirForIndex: (idx?: number) => path.join(sessionRoot, `run-${idx ?? 0}`),
+			artifactsDir: getArtifactsDir(ctx.sessionManager.getSessionFile() ?? null),
+			artifactConfig: { ...DEFAULT_ARTIFACT_CONFIG } as ArtifactConfig,
+		};
+	};
+
+	const makeAgentCompletions = (multiAgent: boolean) => (prefix: string) => {
+		const agents = discoverAgents(baseCwd, "both").agents;
+		if (!multiAgent) {
+			if (prefix.includes(" ")) return null;
+			return agents.filter((a) => a.name.startsWith(prefix)).map((a) => ({ value: a.name, label: a.name }));
+		}
+
+		const lastArrow = prefix.lastIndexOf(" -> ");
+		const segment = lastArrow !== -1 ? prefix.slice(lastArrow + 4) : prefix;
+		if (segment.includes(" -- ") || segment.includes('"') || segment.includes("'")) return null;
+
+		const lastWord = (prefix.match(/(\S*)$/) || ["", ""])[1];
+		const beforeLastWord = prefix.slice(0, prefix.length - lastWord.length);
+
+		if (lastWord === "->") {
+			return agents.map((a) => ({ value: `${prefix} ${a.name}`, label: a.name }));
+		}
+
+		return agents.filter((a) => a.name.startsWith(lastWord)).map((a) => ({ value: `${beforeLastWord}${a.name}`, label: a.name }));
+	};
+
+	const openAgentManager = async (ctx: ExtensionContext) => {
+		const agentData = { ...discoverAgentsAll(ctx.cwd), cwd: ctx.cwd };
+		const models = ctx.modelRegistry.getAvailable().map((m) => ({
+			provider: m.provider,
+			id: m.id,
+			fullId: `${m.provider}/${m.id}`,
+		}));
+		const skills = discoverAvailableSkills(ctx.cwd);
+
+		const result = await ctx.ui.custom<ManagerResult>(
+			(tui, theme, _kb, done) => new AgentManagerComponent(tui, theme, agentData, models, skills, done),
+			{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
+		);
+		if (!result) return;
+
+		// Ad-hoc chains from the overlay use direct execution for the chain-clarify TUI.
+		// All other paths (single, saved-chain, parallel launches, slash commands)
+		// route through sendToolCall → LLM → tool handler to get live progress.
+		if (result.action === "chain") {
+			const agents = discoverAgents(baseCwd, "both").agents;
+			const exec = setupDirectRun(ctx);
+			const chain: SequentialStep[] = result.agents.map((name, i) => ({
+				agent: name,
+				...(i === 0 ? { task: result.task } : {}),
+			}));
+			executeChain({ chain, task: result.task, agents, ctx, ...exec, clarify: true })
+				.then((r) => pi.sendUserMessage(r.content[0]?.text || "(no output)"))
+				.catch((err) => pi.sendUserMessage(`Chain failed: ${err instanceof Error ? err.message : String(err)}`));
+			return;
+		}
+
+		const sendToolCall = (params: Record<string, unknown>) => {
+			pi.sendUserMessage(
+				`Call the subagent tool with these exact parameters: ${JSON.stringify({ ...params, agentScope: "both" })}`,
+			);
+		};
+
+		if (result.action === "launch") {
+			sendToolCall({ agent: result.agent, task: result.task, clarify: !result.skipClarify });
+		} else if (result.action === "launch-chain") {
+			const chainParam = result.chain.steps.map((step) => ({
+				agent: step.agent,
+				task: step.task || undefined,
+				output: step.output,
+				reads: step.reads,
+				progress: step.progress,
+				skill: step.skills,
+				model: step.model,
+			}));
+			sendToolCall({ chain: chainParam, task: result.task, clarify: !result.skipClarify });
+		} else if (result.action === "parallel") {
+			sendToolCall({ tasks: result.tasks, clarify: !result.skipClarify });
+		}
+	};
+
+	pi.registerCommand("agents", {
+		description: "Open the Agents Manager",
+		handler: async (_args, ctx) => {
+			await openAgentManager(ctx);
+		},
+	});
+
+	pi.registerCommand("run", {
+		description: "Run a subagent directly: /run agent[output=file] task",
+		getArgumentCompletions: makeAgentCompletions(false),
+		handler: async (args, ctx) => {
+			const input = args.trim();
+			const firstSpace = input.indexOf(" ");
+			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task>", "error"); return; }
+			const { name: agentName, config: inline } = parseAgentToken(input.slice(0, firstSpace));
+			const task = input.slice(firstSpace + 1).trim();
+			if (!task) { ctx.ui.notify("Usage: /run <agent> <task>", "error"); return; }
+
+			const agents = discoverAgents(baseCwd, "both").agents;
+			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
+
+			let finalTask = task;
+			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
+				finalTask = `[Read from: ${inline.reads.join(", ")}]\n\n${finalTask}`;
+			}
+			const params: Record<string, unknown> = { agent: agentName, task: finalTask, clarify: false };
+			if (inline.output !== undefined) params.output = inline.output;
+			if (inline.skill !== undefined) params.skill = inline.skill;
+			if (inline.model) params.model = inline.model;
+			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ ...params, agentScope: "both" })}`);
+		},
+	});
+
+	interface ParsedStep { name: string; config: InlineConfig; task?: string }
+
+	const parseAgentArgs = (args: string, command: string, ctx: ExtensionContext): { steps: ParsedStep[]; task: string } | null => {
+		const input = args.trim();
+		const usage = `Usage: /${command} agent1 "task1" -> agent2 "task2"`;
+		let steps: ParsedStep[];
+		let sharedTask: string;
+		let perStep = false;
+
+		if (input.includes(" -> ")) {
+			perStep = true;
+			const segments = input.split(" -> ");
+			steps = [];
+			for (const seg of segments) {
+				const trimmed = seg.trim();
+				if (!trimmed) continue;
+				let agentPart: string;
+				let task: string | undefined;
+				const qMatch = trimmed.match(/^(\S+(?:\[[^\]]*\])?)\s+(?:"([^"]*)"|'([^']*)')$/);
+				if (qMatch) {
+					agentPart = qMatch[1]!;
+					task = (qMatch[2] ?? qMatch[3]) || undefined;
+				} else {
+					const dashIdx = trimmed.indexOf(" -- ");
+					if (dashIdx !== -1) {
+						agentPart = trimmed.slice(0, dashIdx).trim();
+						task = trimmed.slice(dashIdx + 4).trim() || undefined;
+					} else {
+						agentPart = trimmed;
+					}
+				}
+				const parsed = parseAgentToken(agentPart);
+				steps.push({ ...parsed, task });
+			}
+			sharedTask = steps.find((s) => s.task)?.task ?? "";
+		} else {
+			const delimiterIndex = input.indexOf(" -- ");
+			if (delimiterIndex === -1) {
+				ctx.ui.notify(usage, "error");
+				return null;
+			}
+			const agentsPart = input.slice(0, delimiterIndex).trim();
+			sharedTask = input.slice(delimiterIndex + 4).trim();
+			if (!agentsPart || !sharedTask) {
+				ctx.ui.notify(usage, "error");
+				return null;
+			}
+			steps = agentsPart.split(/\s+/).filter(Boolean).map((t) => parseAgentToken(t));
+		}
+
+		if (steps.length === 0) {
+			ctx.ui.notify(usage, "error");
+			return null;
+		}
+		const agents = discoverAgents(baseCwd, "both").agents;
+		for (const step of steps) {
+			if (!agents.find((a) => a.name === step.name)) {
+				ctx.ui.notify(`Unknown agent: ${step.name}`, "error");
+				return null;
+			}
+		}
+		if (command === "chain" && !steps[0]?.task && (perStep || !sharedTask)) {
+			ctx.ui.notify(`First step must have a task: /chain agent "task" -> agent2`, "error");
+			return null;
+		}
+		if (command === "parallel" && !steps.some((s) => s.task) && !sharedTask) {
+			ctx.ui.notify("At least one step must have a task", "error");
+			return null;
+		}
+		return { steps, task: sharedTask };
+	};
+
+	pi.registerCommand("chain", {
+		description: "Run agents in sequence: /chain scout \"scan code\" -> planner \"analyze auth\"",
+		getArgumentCompletions: makeAgentCompletions(true),
+		handler: async (args, ctx) => {
+			const parsed = parseAgentArgs(args, "chain", ctx);
+			if (!parsed) return;
+			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
+				agent: name,
+				...(stepTask ? { task: stepTask } : i === 0 && parsed.task ? { task: parsed.task } : {}),
+				...(config.output !== undefined ? { output: config.output } : {}),
+				...(config.reads !== undefined ? { reads: config.reads } : {}),
+				...(config.model ? { model: config.model } : {}),
+				...(config.skill !== undefined ? { skill: config.skill } : {}),
+				...(config.progress !== undefined ? { progress: config.progress } : {}),
+			}));
+			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ chain, task: parsed.task, clarify: false, agentScope: "both" })}`);
+		},
+	});
+
+	pi.registerCommand("parallel", {
+		description: "Run agents in parallel: /parallel scout \"scan bugs\" -> reviewer \"check style\"",
+		getArgumentCompletions: makeAgentCompletions(true),
+		handler: async (args, ctx) => {
+			const parsed = parseAgentArgs(args, "parallel", ctx);
+			if (!parsed) return;
+			if (parsed.steps.length > MAX_PARALLEL) { ctx.ui.notify(`Max ${MAX_PARALLEL} parallel tasks`, "error"); return; }
+			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
+				agent: name,
+				task: stepTask ?? parsed.task,
+				...(config.output !== undefined ? { output: config.output } : {}),
+				...(config.reads !== undefined ? { reads: config.reads } : {}),
+				...(config.model ? { model: config.model } : {}),
+				...(config.skill !== undefined ? { skill: config.skill } : {}),
+				...(config.progress !== undefined ? { progress: config.progress } : {}),
+			}));
+			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ chain: [{ parallel: tasks }], task: parsed.task, clarify: false, agentScope: "both" })}`);
+		},
+	});
+
+	pi.registerShortcut("ctrl+shift+a", {
+		handler: async (ctx) => {
+			await openAgentManager(ctx);
+		},
+	});
 
 	pi.events.on("subagent:started", (data) => {
 		const info = data as {

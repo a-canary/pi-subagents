@@ -19,6 +19,7 @@ export interface ResolvedStepBehavior {
 	reads: string[] | false;
 	progress: boolean;
 	skills: string[] | false;
+	model?: string;
 }
 
 export interface StepOverrides {
@@ -26,6 +27,7 @@ export interface StepOverrides {
 	reads?: string[] | false;
 	progress?: boolean;
 	skills?: string[] | false;
+	model?: string;
 }
 
 // =============================================================================
@@ -41,6 +43,7 @@ export interface SequentialStep {
 	reads?: string[] | false;
 	progress?: boolean;
 	skill?: string | string[] | false;
+	model?: string;
 }
 
 /** Parallel task item within a parallel step */
@@ -52,6 +55,7 @@ export interface ParallelTaskItem {
 	reads?: string[] | false;
 	progress?: boolean;
 	skill?: string | string[] | false;
+	model?: string;
 }
 
 /** Parallel step: multiple agents running concurrently */
@@ -196,7 +200,8 @@ export function resolveStepBehavior(
 		}
 	}
 
-	return { output, reads, progress, skills };
+	const model = stepOverrides.model ?? agentConfig.model;
+	return { output, reads, progress, skills, model };
 }
 
 // =============================================================================
@@ -326,7 +331,8 @@ export function resolveParallelBehaviors(
 			}
 		}
 
-		return { output, reads, progress, skills };
+		const model = task.model ?? config.model;
+		return { output, reads, progress, skills, model };
 	});
 }
 
@@ -366,4 +372,3 @@ export function aggregateParallelOutputs(results: ParallelTaskResult[]): string 
 		})
 		.join("\n\n");
 }
-

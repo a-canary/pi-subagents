@@ -4,7 +4,6 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import type { AgentConfig } from "./agents.js";
 import {
@@ -17,8 +16,6 @@ import {
 import {
 	type AgentProgress,
 	type ArtifactPaths,
-	type Details,
-	type MaxOutputConfig,
 	type RunSyncOptions,
 	type SingleResult,
 	DEFAULT_MAX_OUTPUT,
@@ -33,6 +30,15 @@ import {
 	extractTextFromContent,
 } from "./utils.js";
 import { buildSkillInjection, resolveSkills } from "./skills.js";
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+export function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {
+	if (!model || !thinking || thinking === "off") return model;
+	const colonIdx = model.lastIndexOf(":");
+	if (colonIdx !== -1 && THINKING_LEVELS.includes(model.substring(colonIdx + 1))) return model;
+	return `${model}:${thinking}`;
+}
 
 /**
  * Run a subagent synchronously (blocking until complete)
@@ -69,9 +75,9 @@ export async function runSync(
 		} catch {}
 		args.push("--session-dir", options.sessionDir);
 	}
-	// Use model override if provided, otherwise use agent's default model
 	const effectiveModel = modelOverride ?? agent.model;
-	if (effectiveModel) args.push("--model", effectiveModel);
+	const modelArg = applyThinkingSuffix(effectiveModel, agent.thinking);
+	if (modelArg) args.push("--model", modelArg);
 	if (agent.tools?.length) {
 		const builtinTools: string[] = [];
 		const extensionPaths: string[] = [];
@@ -113,7 +119,7 @@ export async function runSync(
 		exitCode: 0,
 		messages: [],
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-		model: effectiveModel,  // Initialize with the model we're using
+		model: modelArg,
 		skills: resolvedSkills.length > 0 ? resolvedSkills.map((s) => s.name) : undefined,
 		skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
 	};
@@ -363,22 +369,22 @@ export async function runSync(
 				appendJsonl(artifactPathsResult.jsonlPath, line);
 			}
 		}
-				if (artifactConfig?.includeMetadata !== false) {
-					writeMetadata(artifactPathsResult.metadataPath, {
-						runId,
-						agent: agentName,
-						task,
-						exitCode: result.exitCode,
-						usage: result.usage,
-						model: result.model,
-						durationMs: progress.durationMs,
-						toolCount: progress.toolCount,
-						error: result.error,
-						skills: result.skills,
-						skillsWarning: result.skillsWarning,
-						timestamp: Date.now(),
-					});
-				}
+		if (artifactConfig?.includeMetadata !== false) {
+			writeMetadata(artifactPathsResult.metadataPath, {
+				runId,
+				agent: agentName,
+				task,
+				exitCode: result.exitCode,
+				usage: result.usage,
+				model: result.model,
+				durationMs: progress.durationMs,
+				toolCount: progress.toolCount,
+				error: result.error,
+				skills: result.skills,
+				skillsWarning: result.skillsWarning,
+				timestamp: Date.now(),
+			});
+		}
 
 		if (maxOutput) {
 			const config = { ...DEFAULT_MAX_OUTPUT, ...maxOutput };

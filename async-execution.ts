@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "./agents.js";
+import { applyThinkingSuffix } from "./execution.js";
 import { isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep, type StepOverrides } from "./settings.js";
 import { buildSkillInjection, normalizeSkillInput, resolveSkills } from "./skills.js";
 import {
@@ -148,13 +149,12 @@ export function executeAsyncChain(
 		}
 		return {
 			agent: s.agent,
-			// First step validated to have task; others default to {previous} (replaced by runner)
 			task: s.task ?? "{previous}",
 			cwd: s.cwd,
-			model: a.model,
+			model: applyThinkingSuffix(s.model ?? a.model, a.thinking),
 			tools: a.tools,
+			mcpDirectTools: a.mcpDirectTools,
 			systemPrompt,
-			// Only track skills that were actually resolved (consistent with single mode)
 			skills: resolvedSkills.map((r) => r.name),
 		};
 	});
@@ -239,10 +239,10 @@ export function executeAsyncSingle(
 					agent,
 					task,
 					cwd,
-					model: agentConfig.model,
+					model: applyThinkingSuffix(agentConfig.model, agentConfig.thinking),
 					tools: agentConfig.tools,
+					mcpDirectTools: agentConfig.mcpDirectTools,
 					systemPrompt,
-					// Only track skills that were actually resolved
 					skills: resolvedSkills.map((r) => r.name),
 				},
 			],

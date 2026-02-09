@@ -8,8 +8,15 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
-import type { AgentConfig } from "./agents.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { AgentConfig, ChainConfig, ChainStepConfig } from "./agents.js";
 import type { ResolvedStepBehavior } from "./settings.js";
+import type { TextEditorState } from "./text-editor.js";
+import { createEditorState, ensureCursorVisible, getCursorDisplayPos, handleEditorInput, renderEditor, wrapText } from "./text-editor.js";
+import { updateFrontmatterField } from "./agent-serializer.js";
+import { serializeChain } from "./chain-serializer.js";
 
 /** Clarify TUI mode */
 export type ClarifyMode = 'single' | 'parallel' | 'chain';
@@ -53,9 +60,7 @@ export class ChainClarifyComponent implements Component {
 	private selectedStep = 0;
 	private editingStep: number | null = null;
 	private editMode: EditMode = "template";
-	private editBuffer: string = "";
-	private editCursor: number = 0;
-	private editViewportOffset: number = 0;
+	private editState: TextEditorState = createEditorState();
 
 	/** Lines visible in full edit mode */
 	private readonly EDIT_VIEWPORT_HEIGHT = 12;
@@ -79,6 +84,10 @@ export class ChainClarifyComponent implements Component {
 	private skillSelectedNames: Set<string> = new Set();
 	private skillCursorIndex: number = 0;
 	private filteredSkills: Array<{ name: string; source: string; description?: string }> = [];
+	private saveMessage: { text: string; type: "info" | "error" } | null = null;
+	private saveMessageTimer: ReturnType<typeof setTimeout> | null = null;
+	private saveChainNameState: TextEditorState = createEditorState();
+	private savingChain = false;
 
 	constructor(
 		private tui: TUI,
@@ -143,7 +152,7 @@ export class ChainClarifyComponent implements Component {
 	/** Exit edit mode and reset state */
 	private exitEditMode(): void {
 		this.editingStep = null;
-		this.editViewportOffset = 0;
+		this.editState = createEditorState();
 		this.tui.requestRender();
 	}
 
@@ -151,86 +160,22 @@ export class ChainClarifyComponent implements Component {
 	// Full edit mode methods
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	/** Word-wrap text to specified width, tracking buffer positions */
-	private wrapText(text: string, width: number): { lines: string[]; starts: number[] } {
-		const lines: string[] = [];
-		const starts: number[] = [];
-
-		// Guard against invalid width
-		if (width <= 0) {
-			return { lines: [text], starts: [0] };
-		}
-
-		// Handle empty text
-		if (text.length === 0) {
-			return { lines: [""], starts: [0] };
-		}
-
-		let pos = 0;
-		while (pos < text.length) {
-			starts.push(pos);
-
-			// Take up to `width` characters
-			const remaining = text.length - pos;
-			const lineLen = Math.min(width, remaining);
-			lines.push(text.slice(pos, pos + lineLen));
-			pos += lineLen;
-		}
-
-		// Handle cursor at very end when text fills last line exactly
-		// Cursor at position text.length needs a place to render
-		if (text.length > 0 && text.length % width === 0) {
-			starts.push(text.length);
-			lines.push(""); // Empty line for cursor to sit on
-		}
-
-		return { lines, starts };
-	}
-
-	/** Convert buffer position to display line/column */
-	private getCursorDisplayPos(cursor: number, starts: number[]): { line: number; col: number } {
-		for (let i = starts.length - 1; i >= 0; i--) {
-			if (cursor >= starts[i]) {
-				return { line: i, col: cursor - starts[i] };
-			}
-		}
-		return { line: 0, col: 0 };
-	}
-
-	/** Calculate new viewport offset to keep cursor visible */
-	private ensureCursorVisible(cursorLine: number, viewportHeight: number, currentOffset: number): number {
-		let offset = currentOffset;
-
-		// Cursor above viewport - scroll up
-		if (cursorLine < offset) {
-			offset = cursorLine;
-		}
-		// Cursor below viewport - scroll down
-		else if (cursorLine >= offset + viewportHeight) {
-			offset = cursorLine - viewportHeight + 1;
-		}
-
-		return Math.max(0, offset);
-	}
-
 	/** Render the full-edit takeover view */
 	private renderFullEditMode(): string[] {
 		const innerW = this.width - 2;
 		const textWidth = innerW - 2; // 1 char padding on each side
 		const lines: string[] = [];
 
-		// Word wrap the edit buffer
-		const { lines: wrapped, starts } = this.wrapText(this.editBuffer, textWidth);
-
-		// Find cursor display position
-		const cursorPos = this.getCursorDisplayPos(this.editCursor, starts);
-
-		// Auto-scroll to keep cursor visible
-		this.editViewportOffset = this.ensureCursorVisible(
-			cursorPos.line,
-			this.EDIT_VIEWPORT_HEIGHT,
-			this.editViewportOffset,
-		);
+		const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
+		const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
+		this.editState = {
+			...this.editState,
+			viewportOffset: ensureCursorVisible(
+				cursorPos.line,
+				this.EDIT_VIEWPORT_HEIGHT,
+				this.editState.viewportOffset,
+			),
+		};
 
 		// Header (truncate agent name to prevent overflow)
 		const fieldName = this.editMode === "template" ? "task" : this.editMode;
@@ -249,27 +194,15 @@ export class ChainClarifyComponent implements Component {
 		lines.push(this.renderHeader(headerText));
 		lines.push(this.row(""));
 
-		// Render visible lines from viewport
-		for (let i = 0; i < this.EDIT_VIEWPORT_HEIGHT; i++) {
-			const lineIdx = this.editViewportOffset + i;
-			if (lineIdx < wrapped.length) {
-				let content = wrapped[lineIdx];
-
-				// Insert cursor if on this line
-				if (lineIdx === cursorPos.line) {
-					content = this.renderWithCursor(content, cursorPos.col);
-				}
-
-				lines.push(this.row(` ${content}`));
-			} else {
-				lines.push(this.row(""));
-			}
+		const editorLines = renderEditor(this.editState, textWidth, this.EDIT_VIEWPORT_HEIGHT);
+		for (const line of editorLines) {
+			lines.push(this.row(` ${line}`));
 		}
 
 		// Scroll indicators
-		const linesBelow = wrapped.length - this.editViewportOffset - this.EDIT_VIEWPORT_HEIGHT;
+		const linesBelow = wrapped.length - this.editState.viewportOffset - this.EDIT_VIEWPORT_HEIGHT;
 		const hasMore = linesBelow > 0;
-		const hasLess = this.editViewportOffset > 0;
+		const hasLess = this.editState.viewportOffset > 0;
 		let scrollInfo = "";
 		if (hasLess) scrollInfo += "↑";
 		if (hasMore) scrollInfo += `↓ ${linesBelow}+`;
@@ -290,7 +223,7 @@ export class ChainClarifyComponent implements Component {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/** Get effective behavior for a step (with user overrides applied) */
-	private getEffectiveBehavior(stepIndex: number): ResolvedStepBehavior & { model?: string } {
+	private getEffectiveBehavior(stepIndex: number): ResolvedStepBehavior {
 		const base = this.resolvedBehaviors[stepIndex]!;
 		const override = this.behaviorOverrides.get(stepIndex);
 		if (!override) return base;
@@ -300,7 +233,7 @@ export class ChainClarifyComponent implements Component {
 			reads: override.reads !== undefined ? override.reads : base.reads,
 			progress: override.progress !== undefined ? override.progress : base.progress,
 			skills: override.skills !== undefined ? override.skills : base.skills,
-			model: override.model,
+			model: override.model !== undefined ? override.model : base.model,
 		};
 	}
 
@@ -308,13 +241,10 @@ export class ChainClarifyComponent implements Component {
 	private getEffectiveModel(stepIndex: number): string {
 		const override = this.behaviorOverrides.get(stepIndex);
 		if (override?.model) return override.model;  // Override is already in provider/model format
-		
-		// Use agent's configured model or "default"
-		const agentModel = this.agentConfigs[stepIndex]?.model;
-		if (!agentModel) return "default";
-		
-		// Resolve model name to full provider/model format
-		return this.resolveModelFullId(agentModel);
+
+		const baseModel = this.resolvedBehaviors[stepIndex]?.model;
+		if (baseModel) return this.resolveModelFullId(baseModel);
+		return "default";
 	}
 
 	/** Resolve a model name to its full provider/model format */
@@ -344,7 +274,170 @@ export class ChainClarifyComponent implements Component {
 		this.behaviorOverrides.set(stepIndex, { ...existing, [field]: value });
 	}
 
+	private buildChainConfig(name: string): ChainConfig {
+		const steps: ChainStepConfig[] = [];
+		for (let i = 0; i < this.agentConfigs.length; i++) {
+			const agent = this.agentConfigs[i]!;
+			const behavior = this.getEffectiveBehavior(i);
+			const override = this.behaviorOverrides.get(i);
+			const template = this.templates[i] ?? "";
+			const step: ChainStepConfig = { agent: agent.name, task: template };
+			if (override?.output !== undefined) step.output = behavior.output;
+			if (override?.reads !== undefined) step.reads = behavior.reads;
+			if (override?.model !== undefined) step.model = behavior.model;
+			if (override?.skills !== undefined) step.skills = behavior.skills;
+			if (override?.progress !== undefined) step.progress = behavior.progress;
+			steps.push(step);
+		}
+		return {
+			name,
+			description: `Chain: ${steps.map((s) => s.agent).join(" → ")}`,
+			source: "user",
+			filePath: "",
+			steps,
+		};
+	}
+
+	private enterSaveChainName(): void {
+		this.savingChain = true;
+		this.saveChainNameState = createEditorState();
+		this.tui.requestRender();
+	}
+
+	private handleSaveChainNameInput(data: string): void {
+		if (matchesKey(data, "tab")) return;
+		const innerW = this.width - 2;
+		const boxInnerWidth = Math.max(10, innerW - 4);
+		const nextState = handleEditorInput(this.saveChainNameState, data, boxInnerWidth);
+		if (nextState) {
+			this.saveChainNameState = nextState;
+			this.tui.requestRender();
+			return;
+		}
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			this.savingChain = false;
+			this.saveChainNameState = createEditorState();
+			this.tui.requestRender();
+			return;
+		}
+		if (matchesKey(data, "return")) {
+			const name = this.saveChainNameState.buffer.trim();
+			if (!name) {
+				this.showSaveMessage("Name is required", "error");
+				this.savingChain = false;
+				this.saveChainNameState = createEditorState();
+				return;
+			}
+			try {
+				const dir = path.join(os.homedir(), ".pi", "agent", "agents");
+				fs.mkdirSync(dir, { recursive: true });
+				const filePath = path.join(dir, `${name}.chain.md`);
+				const config = this.buildChainConfig(name);
+				config.filePath = filePath;
+				fs.writeFileSync(filePath, serializeChain(config), "utf-8");
+				this.showSaveMessage(`Saved ${name}.chain.md`, "info");
+			} catch (err) {
+				this.showSaveMessage(err instanceof Error ? err.message : "Failed to save chain", "error");
+			}
+			this.savingChain = false;
+			this.saveChainNameState = createEditorState();
+		}
+	}
+
+	private showSaveMessage(text: string, type: "info" | "error"): void {
+		this.saveMessage = { text, type };
+		if (this.saveMessageTimer) clearTimeout(this.saveMessageTimer);
+		this.saveMessageTimer = setTimeout(() => {
+			this.saveMessage = null;
+			this.saveMessageTimer = null;
+			this.tui.requestRender();
+		}, 2000);
+		this.tui.requestRender();
+	}
+
+	private arraysEqual(a: string[] | false, b: string[] | false): boolean {
+		if (a === b) return true;
+		if (a === false || b === false) return false;
+		if (a.length !== b.length) return false;
+		for (let i = 0; i < a.length; i++) {
+			if (a[i] !== b[i]) return false;
+		}
+		return true;
+	}
+
+	private saveOverridesToAgent(): void {
+		const stepIndex = this.selectedStep;
+		const agent = this.agentConfigs[stepIndex];
+		if (!agent?.filePath) {
+			this.showSaveMessage("Agent file not found", "error");
+			return;
+		}
+
+		const override = this.behaviorOverrides.get(stepIndex);
+		if (!override) {
+			this.showSaveMessage("No changes to save", "info");
+			return;
+		}
+
+		const base = this.resolvedBehaviors[stepIndex]!;
+		const updates: Array<{ field: string; value: string | undefined }> = [];
+
+		if (override.output !== undefined && override.output !== base.output) {
+			updates.push({
+				field: "output",
+				value: override.output === false ? undefined : override.output,
+			});
+		}
+
+		if (override.reads !== undefined && !this.arraysEqual(override.reads, base.reads)) {
+			updates.push({
+				field: "defaultReads",
+				value: override.reads === false ? undefined : override.reads.join(", "),
+			});
+		}
+
+		if (override.progress !== undefined && override.progress !== base.progress) {
+			updates.push({
+				field: "defaultProgress",
+				value: override.progress ? "true" : undefined,
+			});
+		}
+
+		if (override.skills !== undefined && !this.arraysEqual(override.skills, base.skills)) {
+			updates.push({
+				field: "skills",
+				value: override.skills === false || override.skills.length === 0 ? undefined : override.skills.join(", "),
+			});
+		}
+
+		if (override.model !== undefined) {
+			const baseModel = agent.model ? this.resolveModelFullId(agent.model) : undefined;
+			if (override.model !== baseModel) {
+				updates.push({ field: "model", value: override.model });
+			}
+		}
+
+		if (updates.length === 0) {
+			this.showSaveMessage("No changes to save", "info");
+			return;
+		}
+
+		try {
+			for (const update of updates) {
+				updateFrontmatterField(agent.filePath, update.field, update.value);
+			}
+			this.showSaveMessage("Saved agent settings", "info");
+		} catch (err) {
+			this.showSaveMessage(err instanceof Error ? err.message : "Failed to save agent settings", "error");
+		}
+	}
+
 	handleInput(data: string): void {
+		if (this.savingChain) {
+			this.handleSaveChainNameInput(data);
+			return;
+		}
+
 		if (this.editingStep !== null) {
 			if (this.editMode === "model") {
 				this.handleModelSelectorInput(data);
@@ -445,26 +538,35 @@ export class ChainClarifyComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
+
+		if (data === "S") {
+			this.saveOverridesToAgent();
+			return;
+		}
+
+		if (data === "W" && this.mode === "chain") {
+			this.enterSaveChainName();
+			return;
+		}
 	}
 
 	private enterEditMode(mode: EditMode): void {
 		this.editingStep = this.selectedStep;
 		this.editMode = mode;
-		this.editViewportOffset = 0; // Reset scroll position
+		let buffer = "";
 
 		if (mode === "template") {
 			const template = this.templates[this.selectedStep] ?? "";
-			// For template, use first line only (single-line editor)
-			this.editBuffer = template.split("\n")[0] ?? "";
+			buffer = template.split("\n")[0] ?? "";
 		} else if (mode === "output") {
 			const behavior = this.getEffectiveBehavior(this.selectedStep);
-			this.editBuffer = behavior.output === false ? "" : (behavior.output || "");
+			buffer = behavior.output === false ? "" : (behavior.output || "");
 		} else if (mode === "reads") {
 			const behavior = this.getEffectiveBehavior(this.selectedStep);
-			this.editBuffer = behavior.reads === false ? "" : (behavior.reads?.join(", ") || "");
+			buffer = behavior.reads === false ? "" : (behavior.reads?.join(", ") || "");
 		}
 
-		this.editCursor = 0; // Start at beginning so cursor is visible
+		this.editState = createEditorState(buffer);
 		this.tui.requestRender();
 	}
 
@@ -715,140 +817,43 @@ export class ChainClarifyComponent implements Component {
 
 	private handleEditInput(data: string): void {
 		const textWidth = this.width - 4; // Must match render: innerW - 2 = (width - 2) - 2
-		const { lines: wrapped, starts } = this.wrapText(this.editBuffer, textWidth);
-		const cursorPos = this.getCursorDisplayPos(this.editCursor, starts);
+		if (matchesKey(data, "shift+up") || matchesKey(data, "pageup")) {
+			const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
+			const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
+			const targetLine = Math.max(0, cursorPos.line - this.EDIT_VIEWPORT_HEIGHT);
+			const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0);
+			this.editState = { ...this.editState, cursor: starts[targetLine] + targetCol };
+			this.tui.requestRender();
+			return;
+		}
 
-		// Escape - save and exit
+		if (matchesKey(data, "shift+down") || matchesKey(data, "pagedown")) {
+			const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
+			const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
+			const targetLine = Math.min(wrapped.length - 1, cursorPos.line + this.EDIT_VIEWPORT_HEIGHT);
+			const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0);
+			this.editState = { ...this.editState, cursor: starts[targetLine] + targetCol };
+			this.tui.requestRender();
+			return;
+		}
+
+		if (matchesKey(data, "tab")) return;
+
+		const nextState = handleEditorInput(this.editState, data, textWidth);
+		if (nextState) {
+			this.editState = nextState;
+			this.tui.requestRender();
+			return;
+		}
+
 		if (matchesKey(data, "escape")) {
 			this.saveEdit();
 			this.exitEditMode();
 			return;
 		}
 
-		// Ctrl+C - discard and exit
 		if (matchesKey(data, "ctrl+c")) {
 			this.exitEditMode();
-			return;
-		}
-
-		// Enter - ignored (single-line editing, no newlines)
-		if (matchesKey(data, "return")) {
-			return;
-		}
-
-		// Left arrow - move cursor left
-		if (matchesKey(data, "left")) {
-			if (this.editCursor > 0) this.editCursor--;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Right arrow - move cursor right
-		if (matchesKey(data, "right")) {
-			if (this.editCursor < this.editBuffer.length) this.editCursor++;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Up arrow - move up one display line
-		if (matchesKey(data, "up")) {
-			if (cursorPos.line > 0) {
-				const targetLine = cursorPos.line - 1;
-				const targetCol = Math.min(cursorPos.col, wrapped[targetLine].length);
-				this.editCursor = starts[targetLine] + targetCol;
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		// Down arrow - move down one display line
-		if (matchesKey(data, "down")) {
-			if (cursorPos.line < wrapped.length - 1) {
-				const targetLine = cursorPos.line + 1;
-				const targetCol = Math.min(cursorPos.col, wrapped[targetLine].length);
-				this.editCursor = starts[targetLine] + targetCol;
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		// Page up (Shift+Up or PageUp)
-		if (matchesKey(data, "shift+up") || matchesKey(data, "pageup")) {
-			const targetLine = Math.max(0, cursorPos.line - this.EDIT_VIEWPORT_HEIGHT);
-			const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0);
-			this.editCursor = starts[targetLine] + targetCol;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Page down (Shift+Down or PageDown)
-		if (matchesKey(data, "shift+down") || matchesKey(data, "pagedown")) {
-			const targetLine = Math.min(wrapped.length - 1, cursorPos.line + this.EDIT_VIEWPORT_HEIGHT);
-			const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0);
-			this.editCursor = starts[targetLine] + targetCol;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Home - start of current display line
-		if (matchesKey(data, "home")) {
-			this.editCursor = starts[cursorPos.line];
-			this.tui.requestRender();
-			return;
-		}
-
-		// End - end of current display line
-		if (matchesKey(data, "end")) {
-			this.editCursor = starts[cursorPos.line] + wrapped[cursorPos.line].length;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Ctrl+Home - start of text
-		if (matchesKey(data, "ctrl+home")) {
-			this.editCursor = 0;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Ctrl+End - end of text
-		if (matchesKey(data, "ctrl+end")) {
-			this.editCursor = this.editBuffer.length;
-			this.tui.requestRender();
-			return;
-		}
-
-		// Backspace - delete character before cursor
-		if (matchesKey(data, "backspace")) {
-			if (this.editCursor > 0) {
-				this.editBuffer =
-					this.editBuffer.slice(0, this.editCursor - 1) +
-					this.editBuffer.slice(this.editCursor);
-				this.editCursor--;
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		// Delete - delete character at cursor
-		if (matchesKey(data, "delete")) {
-			if (this.editCursor < this.editBuffer.length) {
-				this.editBuffer =
-					this.editBuffer.slice(0, this.editCursor) +
-					this.editBuffer.slice(this.editCursor + 1);
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		// Printable character - insert at cursor
-		if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			this.editBuffer =
-				this.editBuffer.slice(0, this.editCursor) +
-				data +
-				this.editBuffer.slice(this.editCursor);
-			this.editCursor++;
-			this.tui.requestRender();
 			return;
 		}
 	}
@@ -860,7 +865,7 @@ export class ChainClarifyComponent implements Component {
 			// For template, preserve other lines if they existed
 			const original = this.templates[stepIndex] ?? "";
 			const originalLines = original.split("\n");
-			originalLines[0] = this.editBuffer;
+			originalLines[0] = this.editState.buffer;
 			this.templates[stepIndex] = originalLines.join("\n");
 		} else if (this.editMode === "output") {
 			// Capture OLD output before updating (for downstream propagation)
@@ -868,7 +873,7 @@ export class ChainClarifyComponent implements Component {
 			const oldOutput = typeof oldBehavior.output === "string" ? oldBehavior.output : null;
 
 			// Empty string or whitespace means disable output
-			const trimmed = this.editBuffer.trim();
+			const trimmed = this.editState.buffer.trim();
 			const newOutput = trimmed === "" ? false : trimmed;
 			this.updateBehavior(stepIndex, "output", newOutput);
 
@@ -878,7 +883,7 @@ export class ChainClarifyComponent implements Component {
 			}
 		} else if (this.editMode === "reads") {
 			// Parse comma-separated list, empty means disable reads
-			const trimmed = this.editBuffer.trim();
+			const trimmed = this.editState.buffer.trim();
 			if (trimmed === "") {
 				this.updateBehavior(stepIndex, "reads", false);
 			} else {
@@ -915,7 +920,32 @@ export class ChainClarifyComponent implements Component {
 		}
 	}
 
+	private renderSaveChainName(): string[] {
+		const lines: string[] = [];
+		const innerW = this.width - 2;
+		const boxInnerWidth = Math.max(10, innerW - 4);
+		lines.push(this.renderHeader(" Save Chain "));
+		lines.push(this.row(""));
+		lines.push(this.row(` ${this.theme.fg("dim", "Name:")}`));
+		const top = `┌${"─".repeat(boxInnerWidth)}┐`;
+		const bottom = `└${"─".repeat(boxInnerWidth)}┘`;
+		lines.push(this.row(` ${top}`));
+		const editorState = { ...this.saveChainNameState };
+		const wrapped = wrapText(editorState.buffer, boxInnerWidth);
+		const cursorPos = getCursorDisplayPos(editorState.cursor, wrapped.starts);
+		editorState.viewportOffset = ensureCursorVisible(cursorPos.line, 1, editorState.viewportOffset);
+		const editorLine = renderEditor(editorState, boxInnerWidth, 1)[0] ?? "";
+		lines.push(this.row(` │${this.pad(editorLine, boxInnerWidth)}│`));
+		lines.push(this.row(` ${bottom}`));
+		lines.push(this.row(""));
+		lines.push(this.renderFooter(" [Enter] Save • [Esc] Cancel "));
+		return lines;
+	}
+
 	render(_width: number): string[] {
+		if (this.savingChain) {
+			return this.renderSaveChainName();
+		}
 		if (this.editingStep !== null) {
 			if (this.editMode === "model") {
 				return this.renderModelSelector();
@@ -938,7 +968,6 @@ export class ChainClarifyComponent implements Component {
 
 	/** Render the model selector view */
 	private renderModelSelector(): string[] {
-		const innerW = this.width - 2;
 		const th = this.theme;
 		const lines: string[] = [];
 
@@ -1023,7 +1052,6 @@ export class ChainClarifyComponent implements Component {
 
 	/** Render the thinking level selector view */
 	private renderThinkingSelector(): string[] {
-		const innerW = this.width - 2;
 		const th = this.theme;
 		const lines: string[] = [];
 
@@ -1153,12 +1181,18 @@ export class ChainClarifyComponent implements Component {
 	private getFooterText(): string {
 		switch (this.mode) {
 			case 'single':
-				return ' [Enter] Run • [Esc] Cancel • [e]dit [m]odel [t]hink [w]rite [s]kill ';
+				return ' [Enter] Run • [Esc] Cancel • [e]dit [m]odel [t]hink [w]rite [s]kill [S]ave ';
 			case 'parallel':
-				return ' [Enter] Run • [Esc] Cancel • [e]dit [m]odel [t]hink [s]kill • ↑↓ Nav ';
+				return ' [Enter] Run • [Esc] Cancel • [e]dit [m]odel [t]hink [s]kill [S]ave • ↑↓ Nav ';
 			case 'chain':
-				return ' [Enter] Run • [Esc] Cancel • e m t w r p s • ↑↓ Nav ';
+				return ' [Enter] Run • [Esc] Cancel • e m t w r p s S W • ↑↓ Nav ';
 		}
+	}
+
+	private appendSaveMessage(lines: string[]): void {
+		if (!this.saveMessage) return;
+		const color = this.saveMessage.type === "error" ? "error" : "success";
+		lines.push(this.row(` ${this.theme.fg(color, this.saveMessage.text)}`));
 	}
 
 	/** Render single agent mode (simplified view) */
@@ -1213,6 +1247,7 @@ export class ChainClarifyComponent implements Component {
 		lines.push(this.row(""));
 
 		// Footer
+		this.appendSaveMessage(lines);
 		lines.push(this.renderFooter(this.getFooterText()));
 
 		return lines;
@@ -1271,6 +1306,7 @@ export class ChainClarifyComponent implements Component {
 		}
 
 		// Footer
+		this.appendSaveMessage(lines);
 		lines.push(this.renderFooter(this.getFooterText()));
 
 		return lines;
@@ -1389,20 +1425,15 @@ export class ChainClarifyComponent implements Component {
 		}
 
 		// Footer with keybindings
+		this.appendSaveMessage(lines);
 		lines.push(this.renderFooter(this.getFooterText()));
 
 		return lines;
 	}
 
-	/** Render text with cursor at position (reverse video for visibility) */
-	private renderWithCursor(text: string, cursorPos: number): string {
-		const before = text.slice(0, cursorPos);
-		const cursorChar = text[cursorPos] ?? " ";
-		const after = text.slice(cursorPos + 1);
-		// Use reverse video (\x1b[7m) for cursor, then disable reverse (\x1b[27m)
-		return `${before}\x1b[7m${cursorChar}\x1b[27m${after}`;
-	}
-
 	invalidate(): void {}
-	dispose(): void {}
+	dispose(): void {
+		if (this.saveMessageTimer) clearTimeout(this.saveMessageTimer);
+		this.saveMessageTimer = null;
+	}
 }

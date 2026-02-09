@@ -41,6 +41,7 @@ name: scout
 description: Fast codebase recon
 tools: read, grep, find, ls, bash, mcp:chrome-devtools  # mcp: requires pi-mcp-adapter
 model: claude-haiku-4-5
+thinking: high               # off, minimal, low, medium, high, xhigh
 skill: safe-bash, chrome-devtools  # comma-separated skills to inject
 output: context.md           # writes to {chain_dir}/context.md
 defaultReads: context.md     # comma-separated files to read
@@ -50,6 +51,8 @@ interactive: true            # (parsed but not enforced in v1)
 
 Your system prompt goes here (the markdown body after frontmatter).
 ```
+
+The `thinking` field sets a default extended thinking level for the agent. At runtime it's appended as a `:level` suffix to the model string (e.g., `claude-sonnet-4-5:high`). If the model already has a thinking suffix (from a chain-clarify override), the agent's default is not double-applied.
 
 **MCP Tools**
 
@@ -76,8 +79,150 @@ The MCP adapter's metadata cache must be populated for direct tools to work. On 
 
 **Resolution priority:** step override > agent frontmatter > disabled
 
+## Quick Commands
+
+| Command | Description |
+|---------|-------------|
+| `/run <agent> <task>` | Run a single agent with a task |
+| `/chain agent1 "task1" -> agent2 "task2"` | Run agents in sequence with per-step tasks |
+| `/parallel agent1 "task1" -> agent2 "task2"` | Run agents in parallel with per-step tasks |
+| `/agents` | Open the Agents Manager overlay |
+
+All commands validate agent names locally and tab-complete them, then route through the tool framework for full live progress rendering. Results are sent to the conversation for the LLM to discuss.
+
+### Per-Step Tasks
+
+Use `->` to separate steps and give each step its own task with quotes or `--`:
+
+```
+/chain scout "scan the codebase" -> planner "create implementation plan"
+/parallel scanner "find security issues" -> reviewer "check code style"
+```
+
+Both double and single quotes work. The `--` delimiter also works: `/chain scout -- scan code -> planner -- analyze auth`.
+
+Steps without a task inherit behavior from the execution mode: chain steps get `{previous}` (output from the prior step), parallel steps get the first available task as a fallback.
+
+```
+/chain scout "analyze auth" -> planner -> implementer
+# scout: "analyze auth", planner: gets scout's output, implementer: gets planner's output
+```
+
+**Shared task (no `->`):** Space-separated agents with a single `--` task:
+
+```
+/chain scout planner -- analyze the auth system
+/parallel scout reviewer -- check for security issues
+```
+
+### Inline Per-Step Config
+
+Append `[key=value,...]` to any agent name to override its defaults:
+
+```
+/chain scout[output=context.md] "scan code" -> planner[reads=context.md] "analyze auth"
+/run scout[model=anthropic/claude-sonnet-4] summarize this codebase
+/parallel scanner[output=scan.md] "find issues" -> reviewer[output=review.md] "check style"
+```
+
+| Key | Example | Description |
+|-----|---------|-------------|
+| `output` | `output=context.md` | Write results to file (relative to chain dir for `/chain`/`/parallel`, temp dir for `/run`) |
+| `reads` | `reads=a.md+b.md` | Read files before executing (`+` separates multiple) |
+| `model` | `model=anthropic/claude-sonnet-4` | Override model for this step |
+| `skills` | `skills=planning+review` | Override skills (`+` separates multiple) |
+| `progress` | `progress` | Enable progress tracking |
+
+Set `output=false`, `reads=false`, or `skills=false` to explicitly disable.
+
+## Agents Manager
+
+Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — a TUI for browsing, viewing, editing, creating, and launching agents and chains.
+
+**Screens:**
+
+| Screen | Description |
+|--------|-------------|
+| List | Browse all agents and chains with search/filter, scope badges, chain badges |
+| Detail | View resolved prompt, frontmatter fields, recent run history |
+| Edit | Edit fields with specialized pickers (model, thinking, skills, prompt editor) |
+| Chain Detail | View chain steps with flow visualization and dependency map |
+| Parallel Builder | Build parallel execution slots, add same agent multiple times, per-slot task overrides |
+| Task Input | Enter task and launch with optional skip-clarify toggle |
+| New Agent | Create from templates (Blank, Scout, Planner, Implementer, Code Reviewer, Blank Chain) |
+
+**List screen keybindings:**
+- `↑↓` — navigate agents/chains
+- `Enter` — view detail
+- Type any character — search/filter
+- `Tab` — toggle selection (agents only)
+- `Ctrl+N` — new agent from template
+- `Ctrl+K` — clone current item
+- `Ctrl+D` or `Del` — delete current item
+- `Ctrl+R` — run selected (1 agent: launch, 2+: sequential chain)
+- `Ctrl+P` — open parallel builder (from selection or cursor agent)
+- `Esc` — clear query, then selection, then close overlay
+
+**Parallel builder keybindings:**
+- `↑↓` — navigate slots
+- `Ctrl+A` — add agent (opens search picker)
+- `Del` or `Ctrl+D` — remove slot
+- `Enter` — edit per-slot task override
+- `Ctrl+R` — continue to task input (requires 2+ slots)
+- `Esc` — back to list
+
+**Task input keybindings:**
+- `Enter` — launch (or quick run if skip-clarify is on)
+- `Tab` — toggle skip-clarify (defaults to on for all manager launches)
+- `Esc` — back
+
+**Multi-select workflow:** Select agents with `Tab`, then press `Ctrl+R` for a sequential chain or `Ctrl+P` to open the parallel builder. The parallel builder lets you add the same agent multiple times, set per-slot task overrides, and launch N agents in parallel. Slots without a custom task use the shared task entered on the next screen.
+
+## Chain Files
+
+Chains are `.chain.md` files stored alongside agent files. They define reusable multi-step pipelines.
+
+**Chain file locations:**
+
+| Scope | Path |
+|-------|------|
+| User | `~/.pi/agent/agents/{name}.chain.md` |
+| Project | `.pi/agents/{name}.chain.md` |
+
+**Format:**
+
+```markdown
+---
+name: scout-planner
+description: Gather context then plan implementation
+---
+
+## scout
+output: context.md
+
+Analyze the codebase for {task}
+
+## planner
+reads: context.md
+model: anthropic/claude-sonnet-4-5:high
+progress: true
+
+Create an implementation plan based on {previous}
+```
+
+Each `## agent-name` section defines a step. Config lines (`output`, `reads`, `model`, `skills`, `progress`) go immediately after the header. A blank line separates config from the task text. Chains support the same three-state semantics as tool params: omitted (inherit from agent), value (override), `false` (disable).
+
+Chains can be created from the Agents Manager template picker ("Blank Chain"), or saved from the chain-clarify TUI during execution.
+
 ## Features (beyond base)
 
+- **Slash Commands**: `/run`, `/chain`, `/parallel` with tab-completion and live progress
+- **Agents Manager Overlay**: Browse, view, edit, create, delete, and launch agents/chains from a TUI (`Ctrl+Shift+A`)
+- **Chain Files**: Reusable `.chain.md` files with per-step config, saveable from the clarify TUI
+- **Multi-select & Parallel**: Select agents in the overlay, launch as chain or parallel
+- **Run History**: Per-agent JSONL recording of task, exit code, duration; shown on detail screen
+- **Thinking Level**: First-class `thinking` frontmatter field with picker UI and runtime suffix application
+- **Agent Templates**: Create agents from presets (Scout, Planner, Implementer, Code Reviewer, Blank Chain)
 - **Skill Injection**: Agents declare skills in frontmatter; skills get injected into system prompts
 - **Parallel-in-Chain**: Fan-out/fan-in patterns with `{ parallel: [...] }` steps within chains
 - **Chain Clarification TUI**: Interactive preview/edit of chain templates and behaviors before execution
@@ -127,6 +272,8 @@ Single and parallel modes also support the clarify TUI for previewing/editing pa
 - `w` - Edit writes/output file (single, chain only)
 - `r` - Edit reads list (chain only)
 - `p` - Toggle progress tracking (chain only)
+- `S` - Save current overrides to agent's frontmatter file (all modes)
+- `W` - Save chain configuration to a `.chain.md` file (chain only)
 
 *Model selector mode:*
 - `↑↓` - Navigate model list
@@ -150,10 +297,13 @@ Single and parallel modes also support the clarify TUI for previewing/editing pa
 - `Esc` - Save changes and exit
 - `Ctrl+C` - Discard changes and exit
 - `←→` - Move cursor left/right
+- `Alt+←→` - Move cursor by word
 - `↑↓` - Move cursor up/down by display line (auto-scrolls)
 - `Page Up/Down` or `Shift+↑↓` - Move cursor by viewport (12 lines)
 - `Home/End` - Start/end of current display line
 - `Ctrl+Home/End` - Start/end of text
+- `Alt+Backspace` - Delete word backward
+- Paste supported (multi-line in multi-line editors)
 
 ## Skills
 
@@ -282,6 +432,7 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 | `reads` | `string[] \| false` | agent default | Override files to read from chain dir |
 | `progress` | boolean | agent default | Override progress.md tracking |
 | `skill` | `string \| string[] \| false` | agent default | Override skills or disable all |
+| `model` | string | agent default | Override model for this step |
 
 *Parallel step fields:*
 
@@ -302,6 +453,7 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 | `reads` | `string[] \| false` | agent default | Override files to read |
 | `progress` | boolean | agent default | Override progress tracking |
 | `skill` | `string \| string[] \| false` | agent default | Override skills or disable all |
+| `model` | string | agent default | Override model for this task |
 
 Status tool:
 
@@ -360,16 +512,22 @@ Session files (JSONL) are stored under a per-run session dir (temp by default). 
 
 ## Live progress (sync mode)
 
-During sync execution, the collapsed view shows:
+During sync execution, the collapsed view shows real-time progress for single, chain, and parallel modes.
+
+**Chains:**
 - Header: `... chain 1/2 | 8 tools, 1.4k tok, 38s`
 - Chain visualization with status: `✓scout → ●planner` (✓=done, ●=running, ○=pending, ✗=failed)
 - Current tool: `> read: packages/tui/src/...`
 - Recent output lines (last 2-3 lines)
-- Hint: `(ctrl+o to expand)`
+
+**Parallel:**
+- Header: `... parallel 2/4 | 12 tools, 2.1k tok, 15s`
+- Per-task step cards showing status icon, agent name, model, tool count, and duration
+- Current tool and recent output for each running task
 
 Press **Ctrl+O** to expand the full streaming view with complete output per step.
 
-> **Note:** Chain visualization is only shown for sequential chains. Chains with parallel steps show the header and progress but not the step-by-step visualization.
+> **Note:** Chain visualization (the `✓scout → ●planner` line) is only shown for sequential chains. Chains with parallel steps show per-step cards instead.
 
 ## Async observability
 
@@ -403,20 +561,32 @@ Legacy events (still emitted):
 ## Files
 
 ```
-├── index.ts           # Main extension (registerTool)
-├── agents.ts          # Agent discovery + frontmatter parsing
-├── skills.ts          # Skill resolution, caching, and discovery
-├── settings.ts        # Chain behavior resolution, templates, chain dir
-├── chain-clarify.ts   # TUI component for chain clarification
-├── chain-execution.ts # Chain orchestration (sequential + parallel)
-├── async-execution.ts # Async/background execution support
-├── execution.ts       # Core runSync for single agent execution
-├── render.ts          # TUI rendering (widget, tool result display)
-├── artifacts.ts       # Artifact management
-├── formatters.ts      # Output formatting utilities
-├── schemas.ts         # TypeBox parameter schemas
-├── utils.ts           # Shared utility functions
-├── types.ts           # Shared types
-├── subagent-runner.ts # Async runner
-└── notify.ts          # Async completion notifications
+├── index.ts                      # Main extension, tool registration, overlay dispatch
+├── agents.ts                     # Agent + chain discovery, frontmatter parsing
+├── skills.ts                     # Skill resolution, caching, and discovery
+├── settings.ts                   # Chain behavior resolution, templates, chain dir
+├── chain-clarify.ts              # TUI for chain/single/parallel clarification
+├── chain-execution.ts            # Chain orchestration (sequential + parallel)
+├── chain-serializer.ts           # Parse/serialize .chain.md files
+├── async-execution.ts            # Async/background execution support
+├── execution.ts                  # Core runSync, applyThinkingSuffix
+├── render.ts                     # TUI rendering (widget, tool result display)
+├── artifacts.ts                  # Artifact management
+├── formatters.ts                 # Output formatting utilities
+├── schemas.ts                    # TypeBox parameter schemas
+├── utils.ts                      # Shared utility functions
+├── types.ts                      # Shared types and constants
+├── subagent-runner.ts            # Async runner (detached process)
+├── notify.ts                     # Async completion notifications
+├── agent-manager.ts              # Overlay orchestrator, screen routing, CRUD
+├── agent-manager-list.ts         # List screen (search, multi-select, progressive footer)
+├── agent-manager-detail.ts       # Detail screen (resolved prompt, runs, fields)
+├── agent-manager-edit.ts         # Edit screen (pickers, prompt editor)
+├── agent-manager-parallel.ts     # Parallel builder screen (slot management, agent picker)
+├── agent-manager-chain-detail.ts # Chain detail screen (flow visualization)
+├── agent-serializer.ts           # Serialize agents to markdown frontmatter
+├── agent-templates.ts            # Agent/chain creation templates
+├── render-helpers.ts             # Shared pad/row/header/footer helpers
+├── run-history.ts                # Per-agent run recording (JSONL)
+└── text-editor.ts                # Shared text editor (word nav, paste)
 ```

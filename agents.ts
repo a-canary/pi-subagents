@@ -5,6 +5,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { KNOWN_FIELDS } from "./agent-serializer.js";
+import { parseChain } from "./chain-serializer.js";
 
 export type AgentScope = "user" | "project" | "both";
 
@@ -14,6 +16,7 @@ export interface AgentConfig {
 	tools?: string[];
 	mcpDirectTools?: string[];
 	model?: string;
+	thinking?: string;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -23,6 +26,26 @@ export interface AgentConfig {
 	defaultReads?: string[];
 	defaultProgress?: boolean;
 	interactive?: boolean;
+	extraFields?: Record<string, string>;
+}
+
+export interface ChainStepConfig {
+	agent: string;
+	task: string;
+	output?: string | false;
+	reads?: string[] | false;
+	model?: string;
+	skills?: string[] | false;
+	progress?: boolean;
+}
+
+export interface ChainConfig {
+	name: string;
+	description: string;
+	source: "user" | "project";
+	filePath: string;
+	steps: ChainStepConfig[];
+	extraFields?: Record<string, string>;
 }
 
 export interface AgentDiscoveryResult {
@@ -76,6 +99,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 
 	for (const entry of entries) {
 		if (!entry.name.endsWith(".md")) continue;
+		if (entry.name.endsWith(".chain.md")) continue;
 		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
 
 		const filePath = path.join(dir, entry.name);
@@ -121,12 +145,18 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			.map((s) => s.trim())
 			.filter(Boolean);
 
+		const extraFields: Record<string, string> = {};
+		for (const [key, value] of Object.entries(frontmatter)) {
+			if (!KNOWN_FIELDS.has(key)) extraFields[key] = value;
+		}
+
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools.length > 0 ? tools : undefined,
 			mcpDirectTools: mcpDirectTools.length > 0 ? mcpDirectTools : undefined,
 			model: frontmatter.model,
+			thinking: frontmatter.thinking,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -136,10 +166,47 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			defaultReads: defaultReads && defaultReads.length > 0 ? defaultReads : undefined,
 			defaultProgress: frontmatter.defaultProgress === "true",
 			interactive: frontmatter.interactive === "true",
+			extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
 		});
 	}
 
 	return agents;
+}
+
+function loadChainsFromDir(dir: string, source: "user" | "project"): ChainConfig[] {
+	const chains: ChainConfig[] = [];
+
+	if (!fs.existsSync(dir)) {
+		return chains;
+	}
+
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return chains;
+	}
+
+	for (const entry of entries) {
+		if (!entry.name.endsWith(".chain.md")) continue;
+		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+
+		const filePath = path.join(dir, entry.name);
+		let content: string;
+		try {
+			content = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			continue;
+		}
+
+		try {
+			chains.push(parseChain(content, source, filePath));
+		} catch {
+			continue;
+		}
+	}
+
+	return chains;
 }
 
 function isDirectory(p: string): boolean {
@@ -181,4 +248,24 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
+}
+
+export function discoverAgentsAll(cwd: string): {
+	user: AgentConfig[];
+	project: AgentConfig[];
+	chains: ChainConfig[];
+	userDir: string;
+	projectDir: string | null;
+} {
+	const userDir = path.join(os.homedir(), ".pi", "agent", "agents");
+	const projectDir = findNearestProjectAgentsDir(cwd);
+
+	const user = loadAgentsFromDir(userDir, "user");
+	const project = projectDir ? loadAgentsFromDir(projectDir, "project") : [];
+	const chains = [
+		...loadChainsFromDir(userDir, "user"),
+		...(projectDir ? loadChainsFromDir(projectDir, "project") : []),
+	];
+
+	return { user, project, chains, userDir, projectDir };
 }
