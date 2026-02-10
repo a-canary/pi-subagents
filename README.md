@@ -218,6 +218,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 
 - **Slash Commands**: `/run`, `/chain`, `/parallel` with tab-completion and live progress
 - **Agents Manager Overlay**: Browse, view, edit, create, delete, and launch agents/chains from a TUI (`Ctrl+Shift+A`)
+- **Management Actions**: LLM can list, inspect, create, update, and delete agent/chain definitions via `action` field
 - **Chain Files**: Reusable `.chain.md` files with per-step config, saveable from the clarify TUI
 - **Multi-select & Parallel**: Select agents in the overlay, launch as chain or parallel
 - **Run History**: Per-agent JSONL recording of task, exit code, duration; shown on detail screen
@@ -399,14 +400,78 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 { dir: "/tmp/pi-async-subagent-runs/a53ebe46-..." }
 ```
 
+## Management Actions
+
+Agent definitions are not loaded into LLM context by default. Management actions let the LLM discover, inspect, create, and modify agent and chain definitions at runtime through the `subagent` tool — no manual file editing or restart required. Newly created agents are immediately usable in the same session. Set `action` and omit execution payloads (`task`, `chain`, `tasks`).
+
+```typescript
+// Discover all agents and chains (management defaults to both scopes)
+{ action: "list" }
+{ action: "list", agentScope: "project" }
+
+// Inspect one agent or chain (searches both scopes)
+{ action: "get", agent: "scout" }
+{ action: "get", chainName: "review-pipeline" }
+
+// Create agent
+{ action: "create", config: {
+  name: "Code Scout",
+  description: "Scans codebases for patterns and issues",
+  scope: "user",
+  systemPrompt: "You are a code scout...",
+  model: "anthropic/claude-sonnet-4",
+  tools: "read, bash, mcp:github/search_repositories",
+  skills: "parallel-scout",
+  thinking: "high",
+  output: "context.md",
+  reads: "shared-context.md",
+  progress: true
+}}
+
+// Create chain (presence of steps creates .chain.md)
+{ action: "create", config: {
+  name: "review-pipeline",
+  description: "Scout then review",
+  scope: "project",
+  steps: [
+    { agent: "scout", task: "Scan {task}", output: "context.md" },
+    { agent: "reviewer", task: "Review {previous}", reads: ["context.md"] }
+  ]
+}}
+
+// Update agent fields (merge semantics)
+{ action: "update", agent: "scout", config: { model: "openai/gpt-4o" } }
+{ action: "update", agent: "scout", config: { output: false, skills: "" } } // clear optional fields
+{ action: "update", chainName: "review-pipeline", config: {
+  steps: [
+    { agent: "scout", task: "Scan {task}", output: "context.md" },
+    { agent: "reviewer", task: "Improved review of {previous}", reads: ["context.md"] }
+  ]
+}}
+
+// Delete definitions
+{ action: "delete", agent: "scout" }
+{ action: "delete", chainName: "review-pipeline" }
+```
+
+Notes:
+- `create` uses `config.scope` (`"user"` or `"project"`), not `agentScope`.
+- `update`/`delete` use `agentScope` only for scope disambiguation when the same name exists in both scopes.
+- Agent config mapping: `reads -> defaultReads`, `progress -> defaultProgress`, and `tools` supports `mcp:` entries that map to direct MCP tools.
+- To clear any optional field, set it to `false` or `""` (e.g., `{ model: false }` or `{ skills: "" }`). Both work for all string-typed fields.
+
 ## Parameters
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent` | string | - | Agent name (single mode) |
+| `agent` | string | - | Agent name (single mode) or target for management get/update/delete |
 | `task` | string | - | Task string (single mode) |
+| `action` | string | - | Management action: `list`, `get`, `create`, `update`, `delete` |
+| `chainName` | string | - | Chain name for management get/update/delete |
+| `config` | object | - | Agent or chain config for management create/update |
 | `output` | `string \| false` | agent default | Override output file for single agent |
 | `skill` | `string \| string[] \| false` | agent default | Override skills (comma-separated string, array, or false to disable) |
+| `model` | string | agent default | Override model for single agent |
 | `tasks` | `{agent, task, cwd?, skill?}[]` | - | Parallel tasks (sync only) |
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
 | `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
@@ -584,6 +649,7 @@ Legacy events (still emitted):
 ├── agent-manager-edit.ts         # Edit screen (pickers, prompt editor)
 ├── agent-manager-parallel.ts     # Parallel builder screen (slot management, agent picker)
 ├── agent-manager-chain-detail.ts # Chain detail screen (flow visualization)
+├── agent-management.ts           # Management action handlers (list, get, create, update, delete)
 ├── agent-serializer.ts           # Serialize agents to markdown frontmatter
 ├── agent-templates.ts            # Agent/chain creation templates
 ├── render-helpers.ts             # Shared pad/row/header/footer helpers

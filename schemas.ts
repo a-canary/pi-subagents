@@ -59,8 +59,20 @@ export const MaxOutputSchema = Type.Optional(
 );
 
 export const SubagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode)" })),
+	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode)" })),
+	// Management action (when present, tool operates in management mode)
+	action: Type.Optional(Type.String({
+		description: "Management action: 'list' (discover agents/chains), 'get' (full detail), 'create', 'update', 'delete'. Omit for execution mode."
+	})),
+	// Chain identifier for management (can't reuse 'chain' — that's the execution array)
+	chainName: Type.Optional(Type.String({
+		description: "Chain name for get/update/delete management actions"
+	})),
+	// Agent/chain configuration for create/update (nested to avoid conflicts with execution fields)
+	config: Type.Optional(Type.Any({
+		description: "Agent or chain config for create/update. Agent: name, description, scope ('user'|'project', default 'user'), systemPrompt, model, tools (comma-separated), skills (comma-separated), thinking, output, reads, progress. Chain: name, description, scope, steps (array of {agent, task?, output?, reads?, model?, skills?, progress?}). Presence of 'steps' creates a chain instead of an agent."
+	})),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task}, ...]" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),

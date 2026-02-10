@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-02-09
+
+### Added
+- **Management mode for `subagent` tool** via `action` field — the LLM can now discover, create, modify, and delete agent/chain definitions at runtime without manual file editing or restarts. Five actions:
+  - `list` — discover agents and chains with scope + description
+  - `get` — full detail for agent or chain, including path and system prompt/steps
+  - `create` — create agent (`.md`) or chain (`.chain.md`) definitions from `config`; immediately usable
+  - `update` — merge-update agent or chain fields, including rename with chain reference warnings
+  - `delete` — remove agent or chain definitions with dangling reference warnings
+- **New `agent-management.ts` module** with all management handlers, validation, and serialization helpers
+- **New management params** in tool schema: `action`, `chainName`, `config`
+- **Agent/chain CRUD safeguards**
+  - Name sanitization (lowercase-hyphenated) for create/rename
+  - Scope-aware uniqueness checks across agents and chains
+  - File-path collision checks to prevent overwriting non-agent markdown files
+  - Scope disambiguation for update/delete when names exist in both user and project scope
+  - Not-found errors include available names for fast self-correction
+  - Per-step validation warnings for model registry and skill availability
+  - Validate-then-mutate ordering — all validation completes before any filesystem mutations
+- **Config field mapping**: `tools` (comma-separated with `mcp:` prefix support), `reads` -> `defaultReads`, `progress` -> `defaultProgress`
+- **Uniform field clearing** — all optional string fields accept both `false` and `""` to clear
+- **JSON string parsing for `config` param** — handles `Type.Any()` delivering objects as JSON strings through the tool framework
+
 ## [0.7.0] - 2026-02-09
 
 ### Added

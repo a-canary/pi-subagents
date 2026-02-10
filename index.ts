@@ -48,6 +48,7 @@ import { isAsyncAvailable, executeAsyncChain, executeAsyncSingle } from "./async
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.js";
 import { recordRun } from "./run-history.js";
+import { handleManagementAction } from "./agent-management.js";
 
 // ExtensionConfig is now imported from ./types.js
 
@@ -147,7 +148,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		description: `Delegate to subagents. Use exactly ONE mode:
+		description: `Delegate to subagents or manage agent definitions.
+
+EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task } - one task
 • CHAIN: { chain: [{agent:"scout"}, {agent:"planner"}] } - sequential pipeline
 • PARALLEL: { tasks: [{agent,task}, ...] } - concurrent execution
@@ -162,12 +165,31 @@ CHAIN DATA FLOW:
 2. Steps can also write files to {chain_dir} (via agent's "output" config)
 3. Later steps can read those files (via agent's "reads" config)
 
-Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }`,
+Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
+
+MANAGEMENT (use action field — omit agent/task/chain/tasks):
+• { action: "list" } - discover available agents and chains
+• { action: "get", agent: "name" } - full agent detail with system prompt
+• { action: "create", config: { name, description, systemPrompt, ... } } - create agent/chain
+• { action: "update", agent: "name", config: { ... } } - modify fields (merge)
+• { action: "delete", agent: "name" } - remove definition
+• Use chainName instead of agent for chain operations`,
 		parameters: SubagentParams,
 
 		async execute(_id, params, signal, onUpdate, ctx) {
-			const scope: AgentScope = params.agentScope ?? "user";
 			baseCwd = ctx.cwd;
+			if (params.action) {
+				const validActions = ["list", "get", "create", "update", "delete"];
+				if (!validActions.includes(params.action)) {
+					return {
+						content: [{ type: "text", text: `Unknown action: ${params.action}. Valid: ${validActions.join(", ")}` }],
+						isError: true,
+						details: { mode: "management" as const, results: [] },
+					};
+				}
+				return handleManagementAction(params.action, params, ctx);
+			}
+			const scope: AgentScope = params.agentScope ?? "user";
 			currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 			const agents = discoverAgents(ctx.cwd, scope).agents;
 			const runId = randomUUID().slice(0, 8);
@@ -630,6 +652,13 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 		},
 
 		renderCall(args, theme) {
+			if (args.action) {
+				const target = args.agent || args.chainName || "";
+				return new Text(
+					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
+					0, 0,
+				);
+			}
 			const isParallel = (args.tasks?.length ?? 0) > 0;
 			const asyncLabel = args.async === true && !isParallel ? theme.fg("warning", " [async]") : "";
 			if (args.chain?.length)

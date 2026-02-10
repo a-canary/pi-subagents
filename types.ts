@@ -96,7 +96,7 @@ export interface SingleResult {
 }
 
 export interface Details {
-	mode: "single" | "parallel" | "chain";
+	mode: "single" | "parallel" | "chain" | "management";
 	results: SingleResult[];
 	asyncId?: string;
 	asyncDir?: string;
