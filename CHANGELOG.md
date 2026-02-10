@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-02-10
+
+### Added
+- **`chainDir` param** for persistent chain artifacts — specify a directory to keep artifacts beyond the default 24-hour `/tmp/` cleanup. Relative paths are resolved to absolute via `path.resolve()` for safe use in `{chain_dir}` template substitutions.
+
 ## [0.8.0] - 2026-02-09
 
 ### Added
@@ -23,7 +28,6 @@
   - Validate-then-mutate ordering — all validation completes before any filesystem mutations
 - **Config field mapping**: `tools` (comma-separated with `mcp:` prefix support), `reads` -> `defaultReads`, `progress` -> `defaultProgress`
 - **Uniform field clearing** — all optional string fields accept both `false` and `""` to clear
-- **`chainDir` param** for persistent chain artifacts — specify a directory to keep artifacts beyond the default 24-hour `/tmp/` cleanup
 - **JSON string parsing for `config` param** — handles `Type.Any()` delivering objects as JSON strings through the tool framework
 
 ## [0.7.0] - 2026-02-09
