@@ -82,12 +82,12 @@ export async function runSync(
 	// without a companion --provider flag. --models resolves the provider
 	// automatically via resolveModelScope. See: #8
 	if (modelArg) args.push("--models", modelArg);
+	const toolExtensionPaths: string[] = [];
 	if (agent.tools?.length) {
 		const builtinTools: string[] = [];
-		const extensionPaths: string[] = [];
 		for (const tool of agent.tools) {
 			if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) {
-				extensionPaths.push(tool);
+				toolExtensionPaths.push(tool);
 			} else {
 				builtinTools.push(tool);
 			}
@@ -95,7 +95,14 @@ export async function runSync(
 		if (builtinTools.length > 0) {
 			args.push("--tools", builtinTools.join(","));
 		}
-		for (const extPath of extensionPaths) {
+	}
+	if (agent.extensions !== undefined) {
+		args.push("--no-extensions");
+		for (const extPath of agent.extensions) {
+			args.push("--extension", extPath);
+		}
+	} else {
+		for (const extPath of toolExtensionPaths) {
 			args.push("--extension", extPath);
 		}
 	}

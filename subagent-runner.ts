@@ -20,6 +20,7 @@ interface SubagentStep {
 	cwd?: string;
 	model?: string;
 	tools?: string[];
+	extensions?: string[];
 	mcpDirectTools?: string[];
 	systemPrompt?: string | null;
 	skills?: string[];
@@ -341,18 +342,23 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		// without a companion --provider flag. --models resolves the provider
 		// automatically via resolveModelScope. See: #8
 		if (step.model) args.push("--models", step.model);
+		const toolExtensionPaths: string[] = [];
 		if (step.tools?.length) {
 			const builtinTools: string[] = [];
-			const extensionPaths: string[] = [];
 			for (const tool of step.tools) {
 				if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) {
-					extensionPaths.push(tool);
+					toolExtensionPaths.push(tool);
 				} else {
 					builtinTools.push(tool);
 				}
 			}
 			if (builtinTools.length > 0) args.push("--tools", builtinTools.join(","));
-			for (const extPath of extensionPaths) args.push("--extension", extPath);
+		}
+		if (step.extensions !== undefined) {
+			args.push("--no-extensions");
+			for (const extPath of step.extensions) args.push("--extension", extPath);
+		} else {
+			for (const extPath of toolExtensionPaths) args.push("--extension", extPath);
 		}
 
 		let tmpDir: string | null = null;

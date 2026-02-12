@@ -21,6 +21,7 @@ export interface AgentConfig {
 	source: "user" | "project";
 	filePath: string;
 	skills?: string[];
+	extensions?: string[];
 	// Chain behavior fields
 	output?: string;
 	defaultReads?: string[];
@@ -145,6 +146,14 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			.map((s) => s.trim())
 			.filter(Boolean);
 
+		let extensions: string[] | undefined;
+		if (frontmatter.extensions !== undefined) {
+			extensions = frontmatter.extensions
+				.split(",")
+				.map((e) => e.trim())
+				.filter(Boolean);
+		}
+
 		const extraFields: Record<string, string> = {};
 		for (const [key, value] of Object.entries(frontmatter)) {
 			if (!KNOWN_FIELDS.has(key)) extraFields[key] = value;
@@ -161,6 +170,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			source,
 			filePath,
 			skills: skills && skills.length > 0 ? skills : undefined,
+			extensions,
 			// Chain behavior fields
 			output: frontmatter.output,
 			defaultReads: defaultReads && defaultReads.length > 0 ? defaultReads : undefined,

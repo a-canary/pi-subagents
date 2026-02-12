@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Agent `extensions` frontmatter support for extension sandboxing: absent field keeps default extension discovery, empty value disables all extensions, and comma-separated values create an explicit extension allowlist.
+
 ### Fixed
 - Parallel chain aggregation now surfaces step failures and warnings in `{previous}` instead of silently passing empty output.
 - Empty-output warnings are now context-aware: runs that intentionally write to explicit output paths are not flagged as warning-only successes in the renderer.
+- Async execution now respects agent `extensions` sandbox settings, matching sync behavior.
 
 ### Changed
 - Reworked `skills.ts` to resolve skills through Pi core skill loading with explicit project-first precedence and support for project/user package and settings skill paths.

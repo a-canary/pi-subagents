@@ -40,6 +40,7 @@ Use `agentScope` parameter to control discovery: `"user"` (default), `"project"`
 name: scout
 description: Fast codebase recon
 tools: read, grep, find, ls, bash, mcp:chrome-devtools  # mcp: requires pi-mcp-adapter
+extensions:                 # absent=all, empty=none, csv=allowlist
 model: claude-haiku-4-5
 thinking: high               # off, minimal, low, medium, high, xhigh
 skill: safe-bash, chrome-devtools  # comma-separated skills to inject
@@ -53,6 +54,27 @@ Your system prompt goes here (the markdown body after frontmatter).
 ```
 
 The `thinking` field sets a default extended thinking level for the agent. At runtime it's appended as a `:level` suffix to the model string (e.g., `claude-sonnet-4-5:high`). If the model already has a thinking suffix (from a chain-clarify override), the agent's default is not double-applied.
+
+**Extension sandboxing**
+
+Use `extensions` in frontmatter to control which extensions a subagent can access:
+
+```yaml
+# Field absent: all extensions load (default behavior)
+
+# Empty field: no extensions
+extensions:
+
+# Allowlist specific extensions
+extensions: /abs/path/to/ext-a.ts, /abs/path/to/ext-b.ts
+```
+
+Semantics:
+- `extensions` absent → all extensions load
+- `extensions:` empty → `--no-extensions`
+- `extensions: a,b` → `--no-extensions --extension a --extension b`
+
+When `extensions` is present, it takes precedence over extension paths implied by `tools` entries.
 
 **MCP Tools**
 
@@ -425,6 +447,7 @@ Agent definitions are not loaded into LLM context by default. Management actions
   systemPrompt: "You are a code scout...",
   model: "anthropic/claude-sonnet-4",
   tools: "read, bash, mcp:github/search_repositories",
+  extensions: "", // empty = no extensions
   skills: "parallel-scout",
   thinking: "high",
   output: "context.md",
@@ -461,7 +484,7 @@ Agent definitions are not loaded into LLM context by default. Management actions
 Notes:
 - `create` uses `config.scope` (`"user"` or `"project"`), not `agentScope`.
 - `update`/`delete` use `agentScope` only for scope disambiguation when the same name exists in both scopes.
-- Agent config mapping: `reads -> defaultReads`, `progress -> defaultProgress`, and `tools` supports `mcp:` entries that map to direct MCP tools.
+- Agent config mapping: `reads -> defaultReads`, `progress -> defaultProgress`, `extensions` controls extension sandboxing, and `tools` supports `mcp:` entries that map to direct MCP tools.
 - To clear any optional field, set it to `false` or `""` (e.g., `{ model: false }` or `{ skills: "" }`). Both work for all string-typed fields.
 
 ## Parameters
