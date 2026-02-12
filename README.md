@@ -149,7 +149,7 @@ Append `[key=value,...]` to any agent name to override its defaults:
 
 | Key | Example | Description |
 |-----|---------|-------------|
-| `output` | `output=context.md` | Write results to file (relative to chain dir for `/chain`/`/parallel`, temp dir for `/run`) |
+| `output` | `output=context.md` | Write results to file (relative to chain dir for `/chain`/`/parallel`; for `/run`, absolute paths are used as-is and relative paths resolve against cwd) |
 | `reads` | `reads=a.md+b.md` | Read files before executing (`+` separates multiple) |
 | `model` | `model=anthropic/claude-sonnet-4` | Override model for this step |
 | `skills` | `skills=planning+review` | Override skills (`+` separates multiple) |
@@ -496,7 +496,7 @@ Notes:
 | `action` | string | - | Management action: `list`, `get`, `create`, `update`, `delete` |
 | `chainName` | string | - | Chain name for management get/update/delete |
 | `config` | object | - | Agent or chain config for management create/update |
-| `output` | `string \| false` | agent default | Override output file for single agent |
+| `output` | `string \| false` | agent default | Override output file for single agent (absolute path as-is, relative path resolved against cwd) |
 | `skill` | `string \| string[] \| false` | agent default | Override skills (comma-separated string, array, or false to disable) |
 | `model` | string | agent default | Override model for single agent |
 | `tasks` | `{agent, task, cwd?, skill?}[]` | - | Parallel tasks (sync only) |

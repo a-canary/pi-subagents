@@ -47,6 +47,7 @@ import { SubagentParams, StatusParams } from "./schemas.js";
 import { executeChain } from "./chain-execution.js";
 import { isAsyncAvailable, executeAsyncChain, executeAsyncSingle } from "./async-execution.js";
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
+import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.js";
 import { recordRun } from "./run-history.js";
 import { handleManagementAction } from "./agent-management.js";
@@ -352,6 +353,8 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 							details: { mode: "single" as const, results: [] },
 						};
 					}
+					const rawOutput = params.output !== undefined ? params.output : a.output;
+					const effectiveOutput: string | false | undefined = rawOutput === true ? a.output : rawOutput;
 					return executeAsyncSingle(id, {
 						agent: params.agent!,
 						task: params.task!,
@@ -369,6 +372,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 							if (normalized === undefined) return undefined;
 							return normalized;
 						})(),
+						output: effectiveOutput,
 					});
 				}
 			}
@@ -598,17 +602,9 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 					if (override?.skills !== undefined) skillOverride = override.skills;
 				}
 
-				// Compute output path at runtime (uses effectiveOutput which may be TUI-modified)
 				const cleanTask = task;
-				let outputPath: string | undefined;
-				if (typeof effectiveOutput === 'string' && effectiveOutput) {
-					const outputDir = path.join(os.tmpdir(), `pi-${agentConfig.name}-${runId}`);
-					fs.mkdirSync(outputDir, { recursive: true });
-					outputPath = `${outputDir}/${effectiveOutput}`;
-
-					// Inject output instruction into task
-					task += `\n\n---\n**Output:** Write your findings to: ${outputPath}`;
-				}
+				const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, params.cwd);
+				task = injectSingleOutputInstruction(task, outputPath);
 
 				const effectiveSkills = skillOverride === false
 					? []
@@ -634,11 +630,13 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 				if (r.progress) allProgress.push(r.progress);
 				if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 
-				// Get output and append file path if applicable
-				let output = r.truncation?.text || getFinalOutput(r.messages);
-				if (outputPath && r.exitCode === 0) {
-					output += `\n\n📄 Output saved to: ${outputPath}`;
-				}
+				const fullOutput = getFinalOutput(r.messages);
+				const finalizedOutput = finalizeSingleOutput({
+					fullOutput,
+					truncatedOutput: r.truncation?.text,
+					outputPath,
+					exitCode: r.exitCode,
+				});
 
 				if (r.exitCode !== 0)
 					return {
@@ -653,7 +651,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 						isError: true,
 					};
 				return {
-					content: [{ type: "text", text: output || "(no output)" }],
+					content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
 					details: {
 						mode: "single",
 						results: [r],

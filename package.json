@@ -33,7 +33,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test recursion-guard.test.ts"
+    "test": "node --experimental-strip-types --test *.test.ts"
   },
   "pi": {
     "extensions": [

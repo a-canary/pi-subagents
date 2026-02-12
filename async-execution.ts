@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "./agents.js";
 import { applyThinkingSuffix } from "./execution.js";
+import { injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
 import { isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep, type StepOverrides } from "./settings.js";
 import { buildSkillInjection, normalizeSkillInput, resolveSkills } from "./skills.js";
 import {
@@ -61,6 +62,7 @@ export interface AsyncSingleParams {
 	shareEnabled: boolean;
 	sessionRoot?: string;
 	skills?: string[];
+	output?: string | false;
 }
 
 export interface AsyncExecutionResult {
@@ -232,13 +234,15 @@ export function executeAsyncSingle(
 	} catch {}
 
 	const runnerCwd = cwd ?? ctx.cwd;
+	const outputPath = resolveSingleOutputPath(params.output, ctx.cwd, cwd);
+	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath);
 	const pid = spawnRunner(
 		{
 			id,
 			steps: [
 				{
 					agent,
-					task,
+					task: taskWithOutputInstruction,
 					cwd,
 					model: applyThinkingSuffix(agentConfig.model, agentConfig.thinking),
 					tools: agentConfig.tools,
@@ -246,6 +250,7 @@ export function executeAsyncSingle(
 					mcpDirectTools: agentConfig.mcpDirectTools,
 					systemPrompt,
 					skills: resolvedSkills.map((r) => r.name),
+					outputPath,
 				},
 			],
 			resultPath: path.join(RESULTS_DIR, `${id}.json`),

@@ -9,6 +9,8 @@
 - Parallel chain aggregation now surfaces step failures and warnings in `{previous}` instead of silently passing empty output.
 - Empty-output warnings are now context-aware: runs that intentionally write to explicit output paths are not flagged as warning-only successes in the renderer.
 - Async execution now respects agent `extensions` sandbox settings, matching sync behavior.
+- Single-mode `output` now resolves explicit paths correctly: absolute paths are used directly, and relative paths resolve against `cwd`.
+- Single-mode output persistence is now caller-side in both sync and async execution, so output files are still written when agents run with read-only tools.
 
 ### Changed
 - Reworked `skills.ts` to resolve skills through Pi core skill loading with explicit project-first precedence and support for project/user package and settings skill paths.

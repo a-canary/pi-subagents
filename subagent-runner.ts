@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendJsonl, getArtifactPaths } from "./artifacts.js";
+import { persistSingleOutput } from "./single-output.js";
 import {
 	type ArtifactConfig,
 	type ArtifactPaths,
@@ -24,6 +25,7 @@ interface SubagentStep {
 	mcpDirectTools?: string[];
 	systemPrompt?: string | null;
 	skills?: string[];
+	outputPath?: string;
 }
 
 interface SubagentRunConfig {
@@ -401,6 +403,19 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 		const output = (result.stdout || "").trim();
 		previousOutput = output;
+		let outputForSummary = output;
+		if (step.outputPath && result.exitCode === 0) {
+			const persisted = persistSingleOutput(step.outputPath, output);
+			if (persisted.savedPath) {
+				outputForSummary = output
+					? `${output}\n\n📄 Output saved to: ${persisted.savedPath}`
+					: `📄 Output saved to: ${persisted.savedPath}`;
+			} else if (persisted.error) {
+				outputForSummary = output
+					? `${output}\n\n⚠️ Failed to save output to: ${step.outputPath}\n${persisted.error}`
+					: `⚠️ Failed to save output to: ${step.outputPath}\n${persisted.error}`;
+			}
+		}
 
 		const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
 		const stepTokens: TokenUsage | null = cumulativeTokens
@@ -416,7 +431,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 		const stepResult: StepResult = {
 			agent: step.agent,
-			output,
+			output: outputForSummary,
 			success: result.exitCode === 0,
 			artifactPaths,
 		};
