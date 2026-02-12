@@ -42,6 +42,8 @@ import {
 	checkSubagentDepth,
 } from "./types.js";
 import { readStatus, findByPrefix, getFinalOutput, mapConcurrent } from "./utils.js";
+import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.js";
+import { createFileCoalescer } from "./file-coalescer.js";
 import { runSync } from "./execution.js";
 import { renderWidget, renderSubagentResult } from "./render.js";
 import { SubagentParams, StatusParams } from "./schemas.js";
@@ -127,6 +129,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		poller.unref?.();
 	};
 
+	const completionSeen = new Map<string, number>();
+	const completionTtlMs = 10 * 60 * 1000;
 	const handleResult = (file: string) => {
 		const p = path.join(RESULTS_DIR, file);
 		if (!fs.existsSync(p)) return;
@@ -134,19 +138,30 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			const data = JSON.parse(fs.readFileSync(p, "utf-8"));
 			if (data.sessionId && data.sessionId !== currentSessionId) return;
 			if (!data.sessionId && data.cwd && data.cwd !== baseCwd) return;
+			const now = Date.now();
+			const completionKey = buildCompletionKey(data, `result:${file}`);
+			if (markSeenWithTtl(completionSeen, completionKey, now, completionTtlMs)) {
+				try {
+					fs.unlinkSync(p);
+				} catch {}
+				return;
+			}
 			pi.events.emit("subagent:complete", data);
-			pi.events.emit("subagent_enhanced:complete", data);
 			fs.unlinkSync(p);
 		} catch {}
 	};
 
+	const resultFileCoalescer = createFileCoalescer(handleResult, 50);
 	const watcher = fs.watch(RESULTS_DIR, (ev, file) => {
-		if (ev === "rename" && file?.toString().endsWith(".json")) setTimeout(() => handleResult(file.toString()), 50);
+		if (ev !== "rename" || !file) return;
+		const fileName = file.toString();
+		if (!fileName.endsWith(".json")) return;
+		resultFileCoalescer.schedule(fileName);
 	});
 	watcher.unref?.();
 	fs.readdirSync(RESULTS_DIR)
 		.filter((f) => f.endsWith(".json"))
-		.forEach(handleResult);
+		.forEach((file) => resultFileCoalescer.schedule(file, 0));
 
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
@@ -1134,6 +1149,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		for (const timer of cleanupTimers.values()) clearTimeout(timer);
 		cleanupTimers.clear();
 		asyncJobs.clear();
+		resultFileCoalescer.clear();
 		if (ctx.hasUI) {
 			lastUiContext = ctx;
 			renderWidget(ctx, []);
@@ -1145,6 +1161,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		for (const timer of cleanupTimers.values()) clearTimeout(timer);
 		cleanupTimers.clear();
 		asyncJobs.clear();
+		resultFileCoalescer.clear();
 		if (ctx.hasUI) {
 			lastUiContext = ctx;
 			renderWidget(ctx, []);
@@ -1156,6 +1173,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		for (const timer of cleanupTimers.values()) clearTimeout(timer);
 		cleanupTimers.clear();
 		asyncJobs.clear();
+		resultFileCoalescer.clear();
 		if (ctx.hasUI) {
 			lastUiContext = ctx;
 			renderWidget(ctx, []);
@@ -1171,6 +1189,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		}
 		cleanupTimers.clear();
 		asyncJobs.clear();
+		resultFileCoalescer.clear();
 		if (lastUiContext?.hasUI) {
 			lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
 		}

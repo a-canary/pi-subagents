@@ -3,6 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./completion-dedupe.js";
 
 interface ChainStepResult {
 	agent: string;
@@ -27,22 +28,14 @@ interface SubagentResult {
 }
 
 export default function registerSubagentNotify(pi: ExtensionAPI): void {
-	const seen = new Map<string, number>();
+	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
 	const ttlMs = 10 * 60 * 1000;
-
-	const prune = (now: number) => {
-		for (const [key, ts] of seen.entries()) {
-			if (now - ts > ttlMs) seen.delete(key);
-		}
-	};
 
 	const handleComplete = (data: unknown) => {
 		const result = data as SubagentResult;
 		const now = Date.now();
-		const key = `${result.id ?? "no-id"}:${result.agent ?? "unknown"}:${result.timestamp ?? now}`;
-		prune(now);
-		if (seen.has(key)) return;
-		seen.set(key, now);
+		const key = buildCompletionKey(result, "notify");
+		if (markSeenWithTtl(seen, key, now, ttlMs)) return;
 
 		const agent = result.agent ?? "unknown";
 		const status = result.success ? "completed" : "failed";
@@ -82,6 +75,4 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	};
 
 	pi.events.on("subagent:complete", handleComplete);
-	pi.events.on("subagent_enhanced:complete", handleComplete);
-	pi.events.on("async_subagent:complete", handleComplete);
 }

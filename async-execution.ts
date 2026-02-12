@@ -184,15 +184,6 @@ export function executeAsyncChain(
 
 	if (pid) {
 		const firstAgent = chain[0] as SequentialStep;
-		ctx.pi.events.emit("subagent_enhanced:started", {
-			id,
-			pid,
-			agent: firstAgent.agent,
-			task: firstAgent.task?.slice(0, 50),
-			chain: chain.map((s) => (s as SequentialStep).agent),
-			cwd: runnerCwd,
-			asyncDir,
-		});
 		ctx.pi.events.emit("subagent:started", {
 			id,
 			pid,
@@ -269,14 +260,6 @@ export function executeAsyncSingle(
 	);
 
 	if (pid) {
-		ctx.pi.events.emit("subagent_enhanced:started", {
-			id,
-			pid,
-			agent,
-			task: task?.slice(0, 50),
-			cwd: runnerCwd,
-			asyncDir,
-		});
 		ctx.pi.events.emit("subagent:started", {
 			id,
 			pid,

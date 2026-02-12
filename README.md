@@ -663,9 +663,7 @@ Async events:
 - `subagent:started`
 - `subagent:complete`
 
-Legacy events (still emitted):
-- `subagent_enhanced:started`
-- `subagent_enhanced:complete`
+`notify.ts` consumes `subagent:complete` as the canonical completion channel.
 
 ## Files
 
