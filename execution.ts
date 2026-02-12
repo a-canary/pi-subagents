@@ -31,6 +31,7 @@ import {
 	extractTextFromContent,
 } from "./utils.js";
 import { buildSkillInjection, resolveSkills } from "./skills.js";
+import { getPiSpawnCommand } from "./pi-spawn.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -170,7 +171,12 @@ export async function runSync(
 	}
 
 	const exitCode = await new Promise<number>((resolve) => {
-		const proc = spawn("pi", args, { cwd: cwd ?? runtimeCwd, env: spawnEnv, stdio: ["ignore", "pipe", "pipe"] });
+		const spawnSpec = getPiSpawnCommand(args);
+		const proc = spawn(spawnSpec.command, spawnSpec.args, {
+			cwd: cwd ?? runtimeCwd,
+			env: spawnEnv,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 		let buf = "";
 
 		// Throttled update mechanism - consolidates all updates

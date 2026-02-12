@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendJsonl, getArtifactPaths } from "./artifacts.js";
+import { getPiSpawnCommand } from "./pi-spawn.js";
 import { persistSingleOutput } from "./single-output.js";
 import {
 	type ArtifactConfig,
@@ -107,7 +108,8 @@ function runPiStreaming(
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
 		const spawnEnv = { ...process.env, ...(env ?? {}), ...getSubagentDepthEnv() };
-		const child = spawn("pi", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
+		const spawnSpec = getPiSpawnCommand(args);
+		const child = spawn(spawnSpec.command, spawnSpec.args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
 		let stdout = "";
 
 		child.stdout.on("data", (chunk: Buffer) => {
