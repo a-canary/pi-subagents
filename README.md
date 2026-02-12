@@ -250,7 +250,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 - **Parallel-in-Chain**: Fan-out/fan-in patterns with `{ parallel: [...] }` steps within chains
 - **Chain Clarification TUI**: Interactive preview/edit of chain templates and behaviors before execution
 - **Agent Frontmatter Extensions**: Agents declare default chain behavior (`output`, `defaultReads`, `defaultProgress`, `skill`)
-- **Chain Artifacts**: Shared directory at `/tmp/pi-chain-runs/{runId}/` for inter-step files
+- **Chain Artifacts**: Shared directory at `<tmpdir>/pi-chain-runs/{runId}/` for inter-step files
 - **Solo Agent Output**: Agents with `output` write to temp dir and return path to caller
 - **Live Progress Display**: Real-time visibility during sync execution showing current tool, recent output, tokens, and duration
 - **Output Truncation**: Configurable byte/line limits via `maxOutput`
@@ -423,7 +423,7 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 **subagent_status tool:**
 ```typescript
 { id: "a53ebe46" }
-{ dir: "/tmp/pi-async-subagent-runs/a53ebe46-..." }
+{ dir: "<tmpdir>/pi-async-subagent-runs/a53ebe46-..." }
 ```
 
 ## Management Actions
@@ -501,7 +501,7 @@ Notes:
 | `model` | string | agent default | Override model for single agent |
 | `tasks` | `{agent, task, cwd?, skill?}[]` | - | Parallel tasks (sync only) |
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
-| `chainDir` | string | `/tmp/pi-chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
+| `chainDir` | string | `<tmpdir>/pi-chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
 | `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
 | `agentScope` | `"user" \| "project" \| "both"` | `both` | Agent discovery scope (project wins on name collisions) |
 | `async` | boolean | false | Background execution (requires `clarify: false` for chains) |
@@ -578,7 +578,7 @@ This aggregated output becomes `{previous}` for the next step.
 
 ## Chain Directory
 
-Each chain run creates `/tmp/pi-chain-runs/{runId}/` containing:
+Each chain run creates `<tmpdir>/pi-chain-runs/{runId}/` containing:
 - `context.md` - Scout/context-builder output
 - `plan.md` - Planner output  
 - `progress.md` - Worker/reviewer shared progress
@@ -591,7 +591,7 @@ Directories older than 24 hours are cleaned up on extension startup.
 
 ## Artifacts
 
-Location: `{sessionDir}/subagent-artifacts/` or `/tmp/pi-subagent-artifacts/`
+Location: `{sessionDir}/subagent-artifacts/` or `<tmpdir>/pi-subagent-artifacts/`
 
 Files per task:
 - `{runId}_{agent}_input.md` - Task prompt
@@ -601,7 +601,7 @@ Files per task:
 
 ## Session Logs
 
-Session files (JSONL) are stored under a per-run session dir (temp by default). The session file path is shown in output. Set `sessionDir` to keep session logs outside `/tmp`.
+Session files (JSONL) are stored under a per-run session dir (temp by default). The session file path is shown in output. Set `sessionDir` to keep session logs outside `<tmpdir>`.
 
 ## Live progress (sync mode)
 
@@ -643,7 +643,7 @@ export PI_SUBAGENT_MAX_DEPTH=0   # disable the subagent tool entirely
 Async runs write a dedicated observability folder:
 
 ```
-/tmp/pi-async-subagent-runs/<id>/
+<tmpdir>/pi-async-subagent-runs/<id>/
   status.json
   events.jsonl
   subagent-log-<id>.md
@@ -654,7 +654,7 @@ Async runs write a dedicated observability folder:
 
 ```typescript
 subagent_status({ id: "<id>" })
-subagent_status({ dir: "/tmp/pi-async-subagent-runs/<id>" })
+subagent_status({ dir: "<tmpdir>/pi-async-subagent-runs/<id>" })
 ```
 
 ## Events

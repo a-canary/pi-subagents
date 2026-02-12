@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-02-11
+
 ### Added
 - Agent `extensions` frontmatter support for extension sandboxing: absent field keeps default extension discovery, empty value disables all extensions, and comma-separated values create an explicit extension allowlist.
 
@@ -20,6 +22,7 @@
 ### Changed
 - Reworked `skills.ts` to resolve skills through Pi core skill loading with explicit project-first precedence and support for project/user package and settings skill paths.
 - Skill discovery now normalizes and prioritizes collisions by source so project-scoped skills consistently win over user-scoped skills.
+- Documentation now references `<tmpdir>` instead of hardcoded `/tmp` paths for cross-platform clarity.
 
 ## [0.8.2] - 2026-02-11
 
@@ -29,7 +32,7 @@
 ## [0.8.1] - 2026-02-10
 
 ### Added
-- **`chainDir` param** for persistent chain artifacts — specify a directory to keep artifacts beyond the default 24-hour `/tmp/` cleanup. Relative paths are resolved to absolute via `path.resolve()` for safe use in `{chain_dir}` template substitutions.
+- **`chainDir` param** for persistent chain artifacts — specify a directory to keep artifacts beyond the default 24-hour temp-directory cleanup. Relative paths are resolved to absolute via `path.resolve()` for safe use in `{chain_dir}` template substitutions.
 
 ## [0.8.0] - 2026-02-09
 
