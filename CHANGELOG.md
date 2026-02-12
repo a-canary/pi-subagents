@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+- Reworked `skills.ts` to resolve skills through Pi core skill loading with explicit project-first precedence and support for project/user package and settings skill paths.
+- Skill discovery now normalizes and prioritizes collisions by source so project-scoped skills consistently win over user-scoped skills.
+
 ## [0.8.2] - 2026-02-11
 
 ### Added

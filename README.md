@@ -310,9 +310,13 @@ Single and parallel modes also support the clarify TUI for previewing/editing pa
 
 Skills are specialized instructions loaded from SKILL.md files and injected into the agent's system prompt.
 
-**Skill locations:**
-- Project: `.pi/skills/{name}/SKILL.md` (higher priority)
+**Skill locations (project-first precedence):**
+- Project: `.pi/skills/{name}/SKILL.md`
+- Project packages: `.pi/npm/node_modules/*` via `package.json -> pi.skills`
+- Project settings: `.pi/settings.json -> skills`
 - User: `~/.pi/agent/skills/{name}/SKILL.md`
+- User packages: `~/.pi/agent/npm/node_modules/*` via `package.json -> pi.skills`
+- User settings: `~/.pi/agent/settings.json -> skills`
 
 **Usage:**
 ```typescript
