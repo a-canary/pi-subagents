@@ -86,4 +86,34 @@ describe("createJsonlWriter", () => {
 		assert.equal(source.paused, 0);
 		assert.equal(source.resumed, 0);
 	});
+
+	it("stops writing when maxBytes exceeded without pausing source", () => {
+		const source = new MockSource();
+		const stream = new MockStream();
+		const writer = createJsonlWriter("/tmp/out.jsonl", source, {
+			createWriteStream: () => stream,
+			maxBytes: 30,
+		});
+		writer.writeLine('{"type":"a"}');
+		writer.writeLine('{"type":"b"}');
+		writer.writeLine('{"type":"c"}');
+		assert.equal(stream.writes.length, 2);
+		assert.deepEqual(stream.writes, ['{"type":"a"}\n', '{"type":"b"}\n']);
+		assert.equal(source.paused, 0);
+	});
+
+	it("allows writes up to exactly maxBytes", () => {
+		const source = new MockSource();
+		const stream = new MockStream();
+		const line = '{"x":"a"}';
+		const lineBytes = Buffer.byteLength(`${line}\n`, "utf-8");
+		const writer = createJsonlWriter("/tmp/out.jsonl", source, {
+			createWriteStream: () => stream,
+			maxBytes: lineBytes * 2,
+		});
+		writer.writeLine(line);
+		writer.writeLine(line);
+		writer.writeLine(line);
+		assert.equal(stream.writes.length, 2);
+	});
 });

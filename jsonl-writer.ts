@@ -11,8 +11,11 @@ export interface JsonlWriteStream {
 	end(callback?: () => void): void;
 }
 
+const DEFAULT_MAX_JSONL_BYTES = 50 * 1024 * 1024;
+
 export interface JsonlWriterDeps {
 	createWriteStream?: (filePath: string) => JsonlWriteStream;
+	maxBytes?: number;
 }
 
 export interface JsonlWriter {
@@ -45,12 +48,18 @@ export function createJsonlWriter(
 
 	let backpressured = false;
 	let closed = false;
+	let bytesWritten = 0;
+	const maxBytes = deps.maxBytes ?? DEFAULT_MAX_JSONL_BYTES;
 
 	return {
 		writeLine(line: string) {
 			if (!stream || closed || !line.trim()) return;
+			const chunk = `${line}\n`;
+			const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+			if (bytesWritten + chunkBytes > maxBytes) return;
 			try {
-				const ok = stream.write(`${line}\n`);
+				const ok = stream.write(chunk);
+				bytesWritten += chunkBytes;
 				if (!ok && !backpressured) {
 					backpressured = true;
 					source.pause();

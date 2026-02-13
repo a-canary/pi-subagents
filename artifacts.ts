@@ -69,3 +69,24 @@ export function cleanupOldArtifacts(dir: string, maxAgeDays: number): void {
 
 	fs.writeFileSync(markerPath, String(now));
 }
+
+export function cleanupAllArtifactDirs(maxAgeDays: number): void {
+	cleanupOldArtifacts(TEMP_ARTIFACTS_DIR, maxAgeDays);
+
+	const sessionsBase = path.join(os.homedir(), ".pi", "agent", "sessions");
+	if (!fs.existsSync(sessionsBase)) return;
+
+	let dirs: string[];
+	try {
+		dirs = fs.readdirSync(sessionsBase);
+	} catch {
+		return;
+	}
+
+	for (const dir of dirs) {
+		const artifactsDir = path.join(sessionsBase, dir, "subagent-artifacts");
+		try {
+			cleanupOldArtifacts(artifactsDir, maxAgeDays);
+		} catch {}
+	}
+}

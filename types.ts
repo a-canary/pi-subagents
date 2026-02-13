@@ -232,7 +232,7 @@ export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 	enabled: true,
 	includeInput: true,
 	includeOutput: true,
-	includeJsonl: true,
+	includeJsonl: false,
 	includeMetadata: true,
 	cleanupDays: 7,
 };

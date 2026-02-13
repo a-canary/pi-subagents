@@ -22,7 +22,7 @@ import { type AgentConfig, type AgentScope, discoverAgents, discoverAgentsAll } 
 import { resolveExecutionAgentScope } from "./agent-scope.js";
 import { cleanupOldChainDirs, getStepAgents, isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep } from "./settings.js";
 import { ChainClarifyComponent, type ChainClarifyResult, type ModelInfo } from "./chain-clarify.js";
-import { cleanupOldArtifacts, getArtifactsDir } from "./artifacts.js";
+import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.js";
 import {
 	type AgentProgress,
 	type ArtifactConfig,
@@ -78,7 +78,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const asyncByDefault = config.asyncByDefault === true;
 
 	const tempArtifactsDir = getArtifactsDir(null);
-	cleanupOldArtifacts(tempArtifactsDir, DEFAULT_ARTIFACT_CONFIG.cleanupDays);
+	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 	let baseCwd = process.cwd();
 	let currentSessionId: string | null = null;
 	const asyncJobs = new Map<string, AsyncJobState>();
@@ -1143,9 +1143,19 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		}
 	});
 
+	const cleanupSessionArtifacts = (ctx: ExtensionContext) => {
+		try {
+			const sessionFile = ctx.sessionManager.getSessionFile();
+			if (sessionFile) {
+				cleanupOldArtifacts(getArtifactsDir(sessionFile), DEFAULT_ARTIFACT_CONFIG.cleanupDays);
+			}
+		} catch {}
+	};
+
 	pi.on("session_start", (_event, ctx) => {
 		baseCwd = ctx.cwd;
 		currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		cleanupSessionArtifacts(ctx);
 		for (const timer of cleanupTimers.values()) clearTimeout(timer);
 		cleanupTimers.clear();
 		asyncJobs.clear();
@@ -1158,6 +1168,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 	pi.on("session_switch", (_event, ctx) => {
 		baseCwd = ctx.cwd;
 		currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		cleanupSessionArtifacts(ctx);
 		for (const timer of cleanupTimers.values()) clearTimeout(timer);
 		cleanupTimers.clear();
 		asyncJobs.clear();
@@ -1170,6 +1181,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 	pi.on("session_branch", (_event, ctx) => {
 		baseCwd = ctx.cwd;
 		currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		cleanupSessionArtifacts(ctx);
 		for (const timer of cleanupTimers.values()) clearTimeout(timer);
 		cleanupTimers.clear();
 		asyncJobs.clear();
