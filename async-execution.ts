@@ -24,11 +24,22 @@ import {
 
 const require = createRequire(import.meta.url);
 const jitiCliPath: string | undefined = (() => {
-	try {
-		return path.join(path.dirname(require.resolve("jiti/package.json")), "lib/jiti-cli.mjs");
-	} catch {
-		return undefined;
+	const candidates: Array<() => string> = [
+		() => path.join(path.dirname(require.resolve("jiti/package.json")), "lib/jiti-cli.mjs"),
+		() => path.join(path.dirname(require.resolve("@mariozechner/jiti/package.json")), "lib/jiti-cli.mjs"),
+		() => {
+			const piEntry = fs.realpathSync(process.argv[1]);
+			const piRequire = createRequire(piEntry);
+			return path.join(path.dirname(piRequire.resolve("@mariozechner/jiti/package.json")), "lib/jiti-cli.mjs");
+		},
+	];
+	for (const candidate of candidates) {
+		try {
+			const p = candidate();
+			if (fs.existsSync(p)) return p;
+		} catch {}
 	}
+	return undefined;
 })();
 
 export interface AsyncExecutionContext {

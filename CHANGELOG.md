@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-02-16
+
+### Fixed
+- Async subagent execution no longer fails with "jiti not found" on machines without a global `jiti` install. The jiti resolution now tries three strategies: vanilla `jiti`, the `@mariozechner/jiti` fork, and finally resolves `@mariozechner/jiti` from pi's own installation via `process.argv[1]`. Since pi always ships the fork as a dependency, async mode now works out of the box.
+- Improved the "jiti not found" error message to explain what's needed and how to fix it.
+
 ## [0.8.4] - 2026-02-13
 
 ### Fixed

@@ -335,7 +335,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 			if (effectiveAsync) {
 				if (!isAsyncAvailable()) {
 					return {
-						content: [{ type: "text", text: "jiti not found" }],
+						content: [{ type: "text", text: "Async mode requires jiti for TypeScript execution but it could not be found. Install globally: npm install -g jiti" }],
 						isError: true,
 						details: { mode: "single" as const, results: [] },
 					};
