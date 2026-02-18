@@ -26,12 +26,17 @@ Agents are markdown files with YAML frontmatter that define specialized subagent
 
 **Agent file locations:**
 
-| Scope | Path |
-|-------|------|
-| User | `~/.pi/agent/agents/{name}.md` |
-| Project | `.pi/agents/{name}.md` (searches up directory tree) |
+| Scope | Path | Priority |
+|-------|------|----------|
+| Builtin | `~/.pi/agent/extensions/subagent/agents/` | Lowest |
+| User | `~/.pi/agent/agents/{name}.md` | Medium |
+| Project | `.pi/agents/{name}.md` (searches up directory tree) | Highest |
 
 Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"both"` (default; project takes priority).
+
+**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `code-reviewer`, `context-builder`, and `researcher`. They load at lowest priority so any user or project agent with the same name overrides them. Builtin agents appear with a `[builtin]` badge in listings and cannot be modified through management actions (create a same-named user agent to override instead).
+
+> **Note:** The `researcher` agent uses `web_search`, `fetch_content`, and `get_search_content` tools which require the [pi-web-access](https://github.com/nicobailon/pi-web-access) extension. Install it with `pi install npm:pi-web-access`.
 
 **Agent frontmatter:**
 
