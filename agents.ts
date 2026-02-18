@@ -11,6 +11,8 @@ import { mergeAgentsForScope } from "./agent-selection.js";
 
 export type AgentScope = "user" | "project" | "both";
 
+export type AgentSource = "builtin" | "user" | "project";
+
 export interface AgentConfig {
 	name: string;
 	description: string;
@@ -19,7 +21,7 @@ export interface AgentConfig {
 	model?: string;
 	thinking?: string;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: AgentSource;
 	filePath: string;
 	skills?: string[];
 	extensions?: string[];
@@ -44,7 +46,7 @@ export interface ChainStepConfig {
 export interface ChainConfig {
 	name: string;
 	description: string;
-	source: "user" | "project";
+	source: AgentSource;
 	filePath: string;
 	steps: ChainStepConfig[];
 	extraFields?: Record<string, string>;
@@ -85,7 +87,7 @@ function parseFrontmatter(content: string): { frontmatter: Record<string, string
 	return { frontmatter, body };
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
 	if (!fs.existsSync(dir)) {
@@ -184,7 +186,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 	return agents;
 }
 
-function loadChainsFromDir(dir: string, source: "user" | "project"): ChainConfig[] {
+function loadChainsFromDir(dir: string, source: AgentSource): ChainConfig[] {
 	const chains: ChainConfig[] = [];
 
 	if (!fs.existsSync(dir)) {
@@ -240,13 +242,16 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
+const BUILTIN_AGENTS_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "agents");
+
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(os.homedir(), ".pi", "agent", "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
+	const builtinAgents = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
-	const agents = mergeAgentsForScope(scope, userAgents, projectAgents);
+	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents);
 
 	return { agents, projectAgentsDir };
 }

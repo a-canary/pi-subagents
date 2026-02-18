@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-02-17
+
+### Added
+- **Builtin agents** — the extension now ships with a default set of agent definitions in `agents/`. These are loaded with lowest priority so user and project agents always override them. New users get a useful set of agents out of the box without manual setup.
+  - `scout` — fast codebase recon (claude-haiku-4-5)
+  - `planner` — implementation plans from context (claude-opus-4-6, thinking: high)
+  - `worker` — general-purpose execution (claude-sonnet-4-6)
+  - `reviewer` — validates implementation against plans (gpt-5.2, thinking: high)
+  - `code-reviewer` — bug hunting and code review (claude-opus-4-6, thinking: high)
+  - `context-builder` — analyzes requirements and codebase (claude-sonnet-4-6)
+  - `researcher` — autonomous web research with search, evaluation, and synthesis (claude-sonnet-4-6)
+- **`"builtin"` agent source** — new third tier in agent discovery. Priority: builtin < user < project. Builtin agents appear in listings with a `[builtin]` badge and cannot be modified or deleted through management actions (create a same-named user agent to override instead).
+
+### Fixed
+- Async subagent session sharing no longer fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. The runner tried `require.resolve("@mariozechner/pi-coding-agent/package.json")` to find pi's HTML export module, but pi's `exports` map doesn't include that subpath. The fix resolves the package root in the main pi process by walking up from `process.argv[1]` and passes it to the spawned runner through the config, bypassing `require.resolve` entirely. The Windows CLI resolution fallback in `getPiSpawnCommand` benefits from the same walk-up function.
+
 ## [0.8.5] - 2026-02-16
 
 ### Fixed

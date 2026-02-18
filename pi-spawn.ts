@@ -4,6 +4,22 @@ import * as path from "node:path";
 
 const require = createRequire(import.meta.url);
 
+export function resolvePiPackageRoot(): string | undefined {
+	try {
+		const entry = process.argv[1];
+		if (!entry) return undefined;
+		let dir = path.dirname(fs.realpathSync(entry));
+		while (dir !== path.dirname(dir)) {
+			try {
+				const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8"));
+				if (pkg.name === "@mariozechner/pi-coding-agent") return dir;
+			} catch {}
+			dir = path.dirname(dir);
+		}
+	} catch {}
+	return undefined;
+}
+
 export interface PiSpawnDeps {
 	platform?: NodeJS.Platform;
 	execPath?: string;
@@ -11,6 +27,7 @@ export interface PiSpawnDeps {
 	existsSync?: (filePath: string) => boolean;
 	readFileSync?: (filePath: string, encoding: "utf-8") => string;
 	resolvePackageJson?: () => string;
+	piPackageRoot?: string;
 }
 
 export interface PiSpawnCommand {
@@ -40,7 +57,11 @@ export function resolveWindowsPiCliScript(deps: PiSpawnDeps = {}): string | unde
 	}
 
 	try {
-		const resolvePackageJson = deps.resolvePackageJson ?? (() => require.resolve("@mariozechner/pi-coding-agent/package.json"));
+		const resolvePackageJson = deps.resolvePackageJson ?? (() => {
+			const root = deps.piPackageRoot ?? resolvePiPackageRoot();
+			if (root) return path.join(root, "package.json");
+			return require.resolve("@mariozechner/pi-coding-agent/package.json");
+		});
 		const packageJsonPath = resolvePackageJson();
 		const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as {
 			bin?: string | Record<string, string>;

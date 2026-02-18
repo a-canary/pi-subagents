@@ -13,6 +13,7 @@ import type { AgentConfig } from "./agents.js";
 import { applyThinkingSuffix } from "./execution.js";
 import { injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
 import { isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep, type StepOverrides } from "./settings.js";
+import { resolvePiPackageRoot } from "./pi-spawn.js";
 import { buildSkillInjection, normalizeSkillInput, resolveSkills } from "./skills.js";
 import {
 	type ArtifactConfig,
@@ -23,6 +24,7 @@ import {
 } from "./types.js";
 
 const require = createRequire(import.meta.url);
+const piPackageRoot = resolvePiPackageRoot();
 const jitiCliPath: string | undefined = (() => {
 	const candidates: Array<() => string> = [
 		() => path.join(path.dirname(require.resolve("jiti/package.json")), "lib/jiti-cli.mjs"),
@@ -188,6 +190,7 @@ export function executeAsyncChain(
 			sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
 			asyncDir,
 			sessionId: ctx.currentSessionId,
+			piPackageRoot,
 		},
 		id,
 		runnerCwd,
@@ -265,6 +268,7 @@ export function executeAsyncSingle(
 			sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
 			asyncDir,
 			sessionId: ctx.currentSessionId,
+			piPackageRoot,
 		},
 		id,
 		runnerCwd,

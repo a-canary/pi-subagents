@@ -44,6 +44,7 @@ interface SubagentRunConfig {
 	sessionDir?: string;
 	asyncDir: string;
 	sessionId?: string | null;
+	piPackageRoot?: string;
 }
 
 interface StepResult {
@@ -134,8 +135,8 @@ function runPiStreaming(
 	});
 }
 
-async function exportSessionHtml(sessionFile: string, outputDir: string): Promise<string> {
-	const pkgRoot = path.dirname(require.resolve("@mariozechner/pi-coding-agent/package.json"));
+async function exportSessionHtml(sessionFile: string, outputDir: string, piPackageRoot?: string): Promise<string> {
+	const pkgRoot = piPackageRoot ?? path.dirname(require.resolve("@mariozechner/pi-coding-agent/package.json"));
 	const exportModulePath = path.join(pkgRoot, "dist", "core", "export-html", "index.js");
 	const moduleUrl = pathToFileURL(exportModulePath).href;
 	const mod = await import(moduleUrl);
@@ -516,7 +517,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		sessionFile = findLatestSessionFile(config.sessionDir) ?? undefined;
 		if (sessionFile) {
 			try {
-				const htmlPath = await exportSessionHtml(sessionFile, config.sessionDir);
+				const htmlPath = await exportSessionHtml(sessionFile, config.sessionDir, config.piPackageRoot);
 				const share = createShareLink(htmlPath);
 				if ("error" in share) shareError = share.error;
 				else {
