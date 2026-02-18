@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	type AgentConfig,
 	type AgentScope,
+	type AgentSource,
 	type ChainConfig,
 	type ChainStepConfig,
 	discoverAgentsAll,
@@ -62,9 +63,13 @@ export function sanitizeName(name: string): string {
 	return name.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+function allAgents(d: { builtin: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[] }): AgentConfig[] {
+	return [...d.builtin, ...d.user, ...d.project];
+}
+
 function availableNames(cwd: string, kind: "agent" | "chain"): string[] {
 	const d = discoverAgentsAll(cwd);
-	const items = kind === "agent" ? [...d.user, ...d.project] : d.chains;
+	const items = kind === "agent" ? allAgents(d) : d.chains;
 	return [...new Set(items.map((x) => x.name))].sort((a, b) => a.localeCompare(b));
 }
 
@@ -72,7 +77,7 @@ export function findAgents(name: string, cwd: string, scope: AgentScope = "both"
 	const d = discoverAgentsAll(cwd);
 	const raw = name.trim();
 	const sanitized = sanitizeName(raw);
-	return [...d.user, ...d.project]
+	return allAgents(d)
 		.filter((a) => (scope === "both" || a.source === scope) && (a.name === raw || a.name === sanitized))
 		.sort((a, b) => a.source.localeCompare(b.source));
 }
@@ -98,7 +103,7 @@ function nameExistsInScope(cwd: string, scope: ManagementScope, name: string, ex
 
 function unknownChainAgents(cwd: string, steps: ChainStepConfig[]): string[] {
 	const d = discoverAgentsAll(cwd);
-	const known = new Set([...d.user, ...d.project].map((a) => a.name));
+	const known = new Set(allAgents(d).map((a) => a.name));
 	return [...new Set(steps.map((s) => s.agent).filter((a) => !known.has(a)))].sort((a, b) => a.localeCompare(b));
 }
 
@@ -233,24 +238,28 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 	return undefined;
 }
 
-function resolveTarget<T extends { source: "user" | "project"; filePath: string }>(
+function resolveTarget<T extends { source: AgentSource; filePath: string }>(
 	kind: "agent" | "chain",
 	name: string,
 	matches: T[],
 	cwd: string,
 	scopeHint?: string,
 ): T | AgentToolResult<Details> {
-	if (matches.length === 0) {
+	const mutable = matches.filter((m) => m.source !== "builtin");
+	if (mutable.length === 0) {
+		if (matches.length > 0) {
+			return result(`${kind === "agent" ? "Agent" : "Chain"} '${name}' is builtin and cannot be modified. Create a same-named ${kind} in user or project scope to override it.`, true);
+		}
 		const available = availableNames(cwd, kind);
 		return result(`${kind === "agent" ? "Agent" : "Chain"} '${name}' not found. Available: ${available.join(", ") || "none"}.`, true);
 	}
-	if (matches.length === 1) return matches[0]!;
+	if (mutable.length === 1) return mutable[0]!;
 	const scope = asDisambiguationScope(scopeHint);
 	if (!scope) {
-		const paths = matches.map((m) => `${m.source}: ${m.filePath}`).join("\n");
+		const paths = mutable.map((m) => `${m.source}: ${m.filePath}`).join("\n");
 		return result(`${kind === "agent" ? "Agent" : "Chain"} '${name}' exists in both scopes. Specify agentScope: 'user' or 'project'.\n${paths}`, true);
 	}
-	const scoped = matches.filter((m) => m.source === scope);
+	const scoped = mutable.filter((m) => m.source === scope);
 	if (scoped.length === 0) return result(`${kind === "agent" ? "Agent" : "Chain"} '${name}' not found in scope '${scope}'.`, true);
 	if (scoped.length > 1) return result(`Multiple ${kind}s named '${name}' found in scope '${scope}': ${scoped.map((m) => m.filePath).join(", ")}`, true);
 	return scoped[0]!;
@@ -309,7 +318,7 @@ export function formatChainDetail(chain: ChainConfig): string {
 export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
 	const d = discoverAgentsAll(ctx.cwd);
-	const agents = [...d.user, ...d.project].filter((a) => scope === "both" || a.source === scope).sort((a, b) => a.name.localeCompare(b.name));
+	const agents = allAgents(d).filter((a) => scope === "both" || a.source === "builtin" || a.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const chains = d.chains.filter((c) => scope === "both" || c.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const lines = ["Agents:", ...(agents.length ? agents.map((a) => `- ${a.name} (${a.source}): ${a.description}`) : ["- (none)"]), "", "Chains:", ...(chains.length ? chains.map((c) => `- ${c.name} (${c.source}): ${c.description}`) : ["- (none)"])];
 	return result(lines.join("\n"));
@@ -363,6 +372,7 @@ export function handleCreate(params: ManagementParams, ctx: ManagementContext): 
 	const targetPath = path.join(targetDir, isChain ? `${name}.chain.md` : `${name}.md`);
 	if (fs.existsSync(targetPath)) return result(`File already exists at ${targetPath} but is not a valid ${isChain ? "chain" : "agent"} definition. Remove or rename it first.`, true);
 	const warnings: string[] = [];
+	if (!isChain && d.builtin.some((a) => a.name === name)) warnings.push(`Note: this shadows the builtin agent '${name}'.`);
 	if (isChain) {
 		const parsed = parseStepList(cfg.steps);
 		if (parsed.error) return result(parsed.error, true);

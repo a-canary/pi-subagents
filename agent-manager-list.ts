@@ -1,4 +1,5 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
+import type { AgentSource } from "./agents.js";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { pad, row, renderHeader, renderFooter, fuzzyFilter, formatScrollInfo } from "./render-helpers.js";
 
@@ -7,7 +8,7 @@ export interface ListAgent {
 	name: string;
 	description: string;
 	model?: string;
-	source: "user" | "project";
+	source: AgentSource;
 	kind: "agent" | "chain";
 	stepCount?: number;
 }
@@ -28,7 +29,7 @@ export type ListAction =
 	| { type: "run-parallel"; ids: string[] }
 	| { type: "close" };
 
-const LIST_VIEWPORT_HEIGHT = 12;
+const LIST_VIEWPORT_HEIGHT = 8;
 
 function selectionCount(selected: string[], id: string): number {
 	let count = 0;
@@ -162,11 +163,11 @@ export function renderList(
 	const filtered = fuzzyFilter(agents, state.filterQuery);
 	clampCursor(state, filtered);
 
-	const agentOnly = agents.filter((a) => a.kind === "agent");
-	const userCount = agentOnly.filter((a) => a.source === "user").length;
-	const projectCount = agentOnly.filter((a) => a.source === "project").length;
+	const agentCount = agents.filter((a) => a.kind === "agent").length;
 	const chainCount = agents.filter((a) => a.kind === "chain").length;
-	const headerText = ` Subagents [user: ${userCount}  project: ${projectCount}  chains: ${chainCount}] `;
+	const headerText = chainCount
+		? ` Subagents [${agentCount} agents  ${chainCount} chains] `
+		: ` Subagents [${agentCount}] `;
 	lines.push(renderHeader(headerText, width, theme));
 	lines.push(row("", width, theme));
 
@@ -207,7 +208,8 @@ export function renderList(
 			const modelDisplay = modelRaw.includes("/") ? modelRaw.split("/").pop() ?? modelRaw : modelRaw;
 			const nameText = isCursor ? theme.fg("accent", agent.name) : agent.name;
 			const modelText = theme.fg("dim", modelDisplay);
-			const scopeBadge = theme.fg("dim", agent.kind === "chain" ? "[chain]" : (agent.source === "user" ? "[user]" : "[proj]"));
+			const scopeLabel = agent.kind === "chain" ? "[chain]" : agent.source === "builtin" ? "[built]" : agent.source === "project" ? "[proj]" : "[user]";
+			const scopeBadge = theme.fg("dim", scopeLabel);
 			const descText = theme.fg("dim", agent.description);
 
 			const descWidth = Math.max(0, innerW - 1 - visibleWidth(prefix) - nameWidth - modelWidth - scopeWidth - 3);

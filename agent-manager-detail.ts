@@ -129,7 +129,7 @@ export function renderDetail(
 	theme: Theme,
 ): string[] {
 	const lines: string[] = [];
-	const scopeBadge = agent.source === "user" ? "[user]" : "[proj]";
+	const scopeBadge = agent.source === "builtin" ? "[built]" : agent.source === "project" ? "[proj]" : "[user]";
 	const headerText = ` ${agent.name} ${scopeBadge} ${formatPath(agent.filePath)} `;
 	lines.push(renderHeader(headerText, width, theme));
 	lines.push(row("", width, theme));
@@ -149,7 +149,10 @@ export function renderDetail(
 	const scrollInfo = formatScrollInfo(state.scrollOffset, Math.max(0, contentLines.length - (state.scrollOffset + DETAIL_VIEWPORT_HEIGHT)));
 	lines.push(row(scrollInfo ? ` ${theme.fg("dim", scrollInfo)}` : "", width, theme));
 
-	lines.push(renderFooter(" [l]aunch  [e]dit  [v] raw/resolved  [↑↓] scroll  [esc] back ", width, theme));
+	const footer = agent.source === "builtin"
+		? " [l]aunch  [v] raw/resolved  [↑↓] scroll  [esc] back "
+		: " [l]aunch  [e]dit  [v] raw/resolved  [↑↓] scroll  [esc] back ";
+	lines.push(renderFooter(footer, width, theme));
 	return lines;
 }
 

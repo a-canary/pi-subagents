@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { KNOWN_FIELDS } from "./agent-serializer.js";
 import { parseChain } from "./chain-serializer.js";
 import { mergeAgentsForScope } from "./agent-selection.js";
@@ -242,7 +243,7 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
-const BUILTIN_AGENTS_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "agents");
+const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(os.homedir(), ".pi", "agent", "agents");
@@ -257,6 +258,7 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 }
 
 export function discoverAgentsAll(cwd: string): {
+	builtin: AgentConfig[];
 	user: AgentConfig[];
 	project: AgentConfig[];
 	chains: ChainConfig[];
@@ -266,6 +268,7 @@ export function discoverAgentsAll(cwd: string): {
 	const userDir = path.join(os.homedir(), ".pi", "agent", "agents");
 	const projectDir = findNearestProjectAgentsDir(cwd);
 
+	const builtin = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
 	const user = loadAgentsFromDir(userDir, "user");
 	const project = projectDir ? loadAgentsFromDir(projectDir, "project") : [];
 	const chains = [
@@ -273,5 +276,5 @@ export function discoverAgentsAll(cwd: string): {
 		...(projectDir ? loadChainsFromDir(projectDir, "project") : []),
 	];
 
-	return { user, project, chains, userDir, projectDir };
+	return { builtin, user, project, chains, userDir, projectDir };
 }
