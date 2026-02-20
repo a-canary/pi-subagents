@@ -18,4 +18,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm test
+      - name: Install devDependencies
+        run: npm install
+      - name: Unit tests
+        run: npm test
+      - name: Integration tests
+        run: npm run test:integration
+      - name: E2E tests
+        run: npm run test:e2e
