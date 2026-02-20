@@ -190,7 +190,7 @@ export function renderList(
 		const innerW = width - 2;
 		const nameWidth = 16;
 		const modelWidth = 12;
-		const scopeWidth = 7;
+		const scopeWidth = 9;
 
 		for (let i = 0; i < visible.length; i++) {
 			const agent = visible[i]!;
@@ -208,7 +208,7 @@ export function renderList(
 			const modelDisplay = modelRaw.includes("/") ? modelRaw.split("/").pop() ?? modelRaw : modelRaw;
 			const nameText = isCursor ? theme.fg("accent", agent.name) : agent.name;
 			const modelText = theme.fg("dim", modelDisplay);
-			const scopeLabel = agent.kind === "chain" ? "[chain]" : agent.source === "builtin" ? "[built]" : agent.source === "project" ? "[proj]" : "[user]";
+			const scopeLabel = agent.kind === "chain" ? "[chain]" : agent.source === "builtin" ? "[builtin]" : agent.source === "project" ? "[proj]" : "[user]";
 			const scopeBadge = theme.fg("dim", scopeLabel);
 			const descText = theme.fg("dim", agent.description);
 

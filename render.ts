@@ -4,7 +4,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getMarkdownTheme, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, type Widget } from "@mariozechner/pi-tui";
+import { Container, Markdown, Spacer, Text, truncateToWidth, visibleWidth, type Widget } from "@mariozechner/pi-tui";
 import {
 	type AsyncJobState,
 	type Details,
@@ -15,6 +15,15 @@ import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath 
 import { getFinalOutput, getDisplayItems, getOutputTail, getLastActivity } from "./utils.js";
 
 type Theme = ExtensionContext["ui"]["theme"];
+
+function getTermWidth(): number {
+	return process.stdout.columns || 120;
+}
+
+function truncLine(text: string, maxWidth: number): string {
+	if (visibleWidth(text) <= maxWidth) return text;
+	return truncateToWidth(text, maxWidth - 1) + "…";
+}
 
 // Track last rendered widget state to avoid no-op re-renders
 let lastWidgetHash = "";
@@ -67,6 +76,7 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	lastWidgetHash = newHash;
 
 	const theme = ctx.ui.theme;
+	const w = getTermWidth();
 	const lines: string[] = [];
 	lines.push(theme.fg("accent", "Async subagents"));
 
@@ -90,12 +100,12 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		const activityText = job.status === "running" ? getLastActivity(job.outputFile) : "";
 		const activitySuffix = activityText ? ` | ${theme.fg("dim", activityText)}` : "";
 
-		lines.push(`- ${id} ${status} | ${agentLabel} | ${stepText}${elapsed ? ` | ${elapsed}` : ""}${tokenText}${activitySuffix}`);
+		lines.push(truncLine(`- ${id} ${status} | ${agentLabel} | ${stepText}${elapsed ? ` | ${elapsed}` : ""}${tokenText}${activitySuffix}`, w));
 
 		if (job.status === "running" && job.outputFile) {
 			const tail = getOutputTail(job.outputFile, 3);
 			for (const line of tail) {
-				lines.push(theme.fg("dim", `  > ${line}`));
+				lines.push(truncLine(theme.fg("dim", `  > ${line}`), w));
 			}
 		}
 	}
@@ -114,7 +124,8 @@ export function renderSubagentResult(
 	const d = result.details;
 	if (!d || !d.results.length) {
 		const t = result.content[0];
-		return new Text(t?.type === "text" ? t.text : "(no output)", 0, 0);
+		const text = t?.type === "text" ? t.text : "(no output)";
+		return new Text(truncLine(text, getTermWidth() - 4), 0, 0);
 	}
 
 	const mdTheme = getMarkdownTheme();
@@ -135,37 +146,42 @@ export function renderSubagentResult(
 				? ` | ${r.progressSummary.toolCount} tools, ${formatTokens(r.progressSummary.tokens)} tok, ${formatDuration(r.progressSummary.durationMs)}`
 				: "";
 
+		const w = getTermWidth() - 4;
 		const c = new Container();
-		c.addChild(new Text(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${progressInfo}`, 0, 0));
+		c.addChild(new Text(truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${progressInfo}`, w), 0, 0));
 		c.addChild(new Spacer(1));
+		const taskMaxLen = Math.max(20, w - 8);
+		const taskPreview = r.task.length > taskMaxLen
+			? `${r.task.slice(0, taskMaxLen)}...`
+			: r.task;
 		c.addChild(
-			new Text(theme.fg("dim", `Task: ${r.task.slice(0, 150)}${r.task.length > 150 ? "..." : ""}`), 0, 0),
+			new Text(truncLine(theme.fg("dim", `Task: ${taskPreview}`), w), 0, 0),
 		);
 		c.addChild(new Spacer(1));
 
 		const items = getDisplayItems(r.messages);
 		for (const item of items) {
 			if (item.type === "tool")
-				c.addChild(new Text(theme.fg("muted", formatToolCall(item.name, item.args)), 0, 0));
+				c.addChild(new Text(truncLine(theme.fg("muted", formatToolCall(item.name, item.args)), w), 0, 0));
 		}
 		if (items.length) c.addChild(new Spacer(1));
 
 		if (output) c.addChild(new Markdown(output, 0, 0, mdTheme));
 		c.addChild(new Spacer(1));
 		if (r.skills?.length) {
-			c.addChild(new Text(theme.fg("dim", `Skills: ${r.skills.join(", ")}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `Skills: ${r.skills.join(", ")}`), w), 0, 0));
 		}
 		if (r.skillsWarning) {
-			c.addChild(new Text(theme.fg("warning", `⚠️ ${r.skillsWarning}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("warning", `⚠️ ${r.skillsWarning}`), w), 0, 0));
 		}
-		c.addChild(new Text(theme.fg("dim", formatUsage(r.usage, r.model)), 0, 0));
+		c.addChild(new Text(truncLine(theme.fg("dim", formatUsage(r.usage, r.model)), w), 0, 0));
 		if (r.sessionFile) {
-			c.addChild(new Text(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`), w), 0, 0));
 		}
 
 		if (r.artifactPaths) {
 			c.addChild(new Spacer(1));
-			c.addChild(new Text(theme.fg("dim", `Artifacts: ${shortenPath(r.artifactPaths.outputPath)}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `Artifacts: ${shortenPath(r.artifactPaths.outputPath)}`), w), 0, 0));
 		}
 		return c;
 	}
@@ -231,7 +247,7 @@ export function renderSubagentResult(
 						&& Boolean(isComplete)
 						&& hasEmptyTextOutputWithoutOutputTarget(result.task, getFinalOutput(result.messages));
 					const isCurrent = i === (d.currentStepIndex ?? d.results.length);
-					const icon = isFailed
+					const stepIcon = isFailed
 						? theme.fg("error", "✗")
 						: isEmptyWithoutTarget
 							? theme.fg("warning", "⚠")
@@ -240,22 +256,23 @@ export function renderSubagentResult(
 								: isCurrent && hasRunning
 									? theme.fg("warning", "●")
 									: theme.fg("dim", "○");
-					return `${icon} ${agent}`;
+					return `${stepIcon} ${agent}`;
 				})
 				.join(theme.fg("dim", " → "))
 		: null;
 
+	const w = getTermWidth() - 4;
 	const c = new Container();
 	c.addChild(
 		new Text(
-			`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${stepInfo}${summaryStr}`,
+			truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${stepInfo}${summaryStr}`, w),
 			0,
 			0,
 		),
 	);
 	// Show chain visualization
 	if (chainVis) {
-		c.addChild(new Text(`  ${chainVis}`, 0, 0));
+		c.addChild(new Text(truncLine(`  ${chainVis}`, w), 0, 0));
 	}
 
 	// === STATIC STEP LAYOUT (like clarification UI) ===
@@ -275,7 +292,7 @@ export function renderSubagentResult(
 
 		if (!r) {
 			// Pending step
-			c.addChild(new Text(theme.fg("dim", `  Step ${i + 1}: ${agentName}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `  Step ${i + 1}: ${agentName}`), w), 0, 0));
 			c.addChild(new Text(theme.fg("dim", `    status: ○ pending`), 0, 0));
 			c.addChild(new Spacer(1));
 			continue;
@@ -299,45 +316,46 @@ export function renderSubagentResult(
 		const stepHeader = rRunning
 			? `${statusIcon} Step ${i + 1}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
 			: `${statusIcon} Step ${i + 1}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
-		c.addChild(new Text(stepHeader, 0, 0));
+		c.addChild(new Text(truncLine(stepHeader, w), 0, 0));
 
-		const taskPreview = r.task.slice(0, 120) + (r.task.length > 120 ? "..." : "");
-		c.addChild(new Text(theme.fg("dim", `    task: ${taskPreview}`), 0, 0));
+		const taskMaxLen = Math.max(20, w - 12);
+		const taskPreview = r.task.slice(0, taskMaxLen) + (r.task.length > taskMaxLen ? "..." : "");
+		c.addChild(new Text(truncLine(theme.fg("dim", `    task: ${taskPreview}`), w), 0, 0));
 
 		const outputTarget = extractOutputTarget(r.task);
 		if (outputTarget) {
-			c.addChild(new Text(theme.fg("dim", `    output: ${outputTarget}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `    output: ${outputTarget}`), w), 0, 0));
 		}
 
 		if (r.skills?.length) {
-			c.addChild(new Text(theme.fg("dim", `    skills: ${r.skills.join(", ")}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `    skills: ${r.skills.join(", ")}`), w), 0, 0));
 		}
 		if (r.skillsWarning) {
-			c.addChild(new Text(theme.fg("warning", `    ⚠️ ${r.skillsWarning}`), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("warning", `    ⚠️ ${r.skillsWarning}`), w), 0, 0));
 		}
 
 		if (rRunning && rProg) {
 			if (rProg.skills?.length) {
-				c.addChild(new Text(theme.fg("accent", `    skills: ${rProg.skills.join(", ")}`), 0, 0));
+				c.addChild(new Text(truncLine(theme.fg("accent", `    skills: ${rProg.skills.join(", ")}`), w), 0, 0));
 			}
 			// Current tool for running step
 			if (rProg.currentTool) {
 				const toolLine = rProg.currentToolArgs
 					? `${rProg.currentTool}: ${rProg.currentToolArgs.slice(0, 100)}${rProg.currentToolArgs.length > 100 ? "..." : ""}`
 					: rProg.currentTool;
-				c.addChild(new Text(theme.fg("warning", `    > ${toolLine}`), 0, 0));
+				c.addChild(new Text(truncLine(theme.fg("warning", `    > ${toolLine}`), w), 0, 0));
 			}
 			// Recent tools
 			if (rProg.recentTools?.length) {
 				for (const t of rProg.recentTools.slice(0, 3)) {
 					const args = t.args.slice(0, 90) + (t.args.length > 90 ? "..." : "");
-					c.addChild(new Text(theme.fg("dim", `      ${t.tool}: ${args}`), 0, 0));
+					c.addChild(new Text(truncLine(theme.fg("dim", `      ${t.tool}: ${args}`), w), 0, 0));
 				}
 			}
 			// Recent output (limited)
 			const recentLines = (rProg.recentOutput ?? []).slice(-5);
 			for (const line of recentLines) {
-				c.addChild(new Text(theme.fg("dim", `      ${line.slice(0, 100)}${line.length > 100 ? "..." : ""}`), 0, 0));
+				c.addChild(new Text(truncLine(theme.fg("dim", `      ${line.slice(0, 100)}${line.length > 100 ? "..." : ""}`), w), 0, 0));
 			}
 		}
 
@@ -346,7 +364,7 @@ export function renderSubagentResult(
 
 	if (d.artifacts) {
 		c.addChild(new Spacer(1));
-		c.addChild(new Text(theme.fg("dim", `Artifacts dir: ${shortenPath(d.artifacts.dir)}`), 0, 0));
+		c.addChild(new Text(truncLine(theme.fg("dim", `Artifacts dir: ${shortenPath(d.artifacts.dir)}`), w), 0, 0));
 	}
 	return c;
 }

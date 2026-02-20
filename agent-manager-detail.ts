@@ -129,7 +129,7 @@ export function renderDetail(
 	theme: Theme,
 ): string[] {
 	const lines: string[] = [];
-	const scopeBadge = agent.source === "builtin" ? "[built]" : agent.source === "project" ? "[proj]" : "[user]";
+	const scopeBadge = agent.source === "builtin" ? "[builtin]" : agent.source === "project" ? "[proj]" : "[user]";
 	const headerText = ` ${agent.name} ${scopeBadge} ${formatPath(agent.filePath)} `;
 	lines.push(renderHeader(headerText, width, theme));
 	lines.push(row("", width, theme));
