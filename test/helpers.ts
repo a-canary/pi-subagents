@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createMockPi as _createMockPi } from "@marcfargas/pi-test-harness";
 import type { MockPi } from "@marcfargas/pi-test-harness";
 
@@ -222,8 +222,8 @@ export async function tryImport<T>(specifier: string): Promise<T | null> {
 			// Resolve relative to project root (parent of test/)
 			const projectRoot = path.resolve(__dirname, "..");
 			const abs = path.resolve(projectRoot, specifier);
-			// Convert to file:// URL for Windows compatibility with dynamic import()
-			const url = `file:///${abs.replace(/\\/g, "/")}`;
+			// Convert to file:// URL for cross-platform compatibility with dynamic import()
+			const url = pathToFileURL(abs).href;
 			return await import(url) as T;
 		}
 		// Bare specifier — import directly (node_modules resolution)
