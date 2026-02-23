@@ -135,8 +135,24 @@ function runPiStreaming(
 	});
 }
 
+function resolvePiPackageRootFallback(): string {
+	// Try to resolve the main entry point and walk up to find the package root
+	const entryPoint = require.resolve("@mariozechner/pi-coding-agent");
+	// Entry point is typically /path/to/dist/index.js, so go up to find package root
+	let dir = path.dirname(entryPoint);
+	while (dir !== path.dirname(dir)) {
+		const pkgJsonPath = path.join(dir, "package.json");
+		try {
+			const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8"));
+			if (pkg.name === "@mariozechner/pi-coding-agent") return dir;
+		} catch {}
+		dir = path.dirname(dir);
+	}
+	throw new Error("Could not resolve @mariozechner/pi-coding-agent package root");
+}
+
 async function exportSessionHtml(sessionFile: string, outputDir: string, piPackageRoot?: string): Promise<string> {
-	const pkgRoot = piPackageRoot ?? path.dirname(require.resolve("@mariozechner/pi-coding-agent/package.json"));
+	const pkgRoot = piPackageRoot ?? resolvePiPackageRootFallback();
 	const exportModulePath = path.join(pkgRoot, "dist", "core", "export-html", "index.js");
 	const moduleUrl = pathToFileURL(exportModulePath).href;
 	const mod = await import(moduleUrl);
