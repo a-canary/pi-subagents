@@ -372,15 +372,17 @@ export function aggregateParallelOutputs(results: ParallelTaskResult[]): string 
 		.map((r, i) => {
 			const header = `=== Parallel Task ${i + 1} (${r.agent}) ===`;
 			const hasTextOutput = Boolean(r.output?.trim());
-			const status = r.exitCode !== 0
-				? `⚠️ FAILED (exit code ${r.exitCode})${r.error ? `: ${r.error}` : ""}`
-				: r.error
-					? `⚠️ WARNING: ${r.error}`
-					: !hasTextOutput && r.outputTargetPath && r.outputTargetExists === false
-						? `⚠️ EMPTY OUTPUT (expected output file missing: ${r.outputTargetPath})`
-						: !hasTextOutput && !r.outputTargetPath
-							? "⚠️ EMPTY OUTPUT (no textual response returned)"
-							: "";
+			const status = r.exitCode === -1
+				? "⏭️ SKIPPED"
+				: r.exitCode !== 0
+					? `⚠️ FAILED (exit code ${r.exitCode})${r.error ? `: ${r.error}` : ""}`
+					: r.error
+						? `⚠️ WARNING: ${r.error}`
+						: !hasTextOutput && r.outputTargetPath && r.outputTargetExists === false
+							? `⚠️ EMPTY OUTPUT (expected output file missing: ${r.outputTargetPath})`
+							: !hasTextOutput && !r.outputTargetPath
+								? "⚠️ EMPTY OUTPUT (no textual response returned)"
+								: "";
 			const body = status
 				? (hasTextOutput ? `${status}\n${r.output}` : status)
 				: r.output;
