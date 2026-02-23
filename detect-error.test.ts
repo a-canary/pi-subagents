@@ -159,11 +159,14 @@ describe("detectSubagentError", () => {
 	});
 
 	it("does not treat tool-call-only assistant message as recovery", () => {
-		// Assistant message that only contains a tool call, no text
+		// Assistant message that only contains a tool call, no text.
+		// The error at index 0 should still be detected because the tool-call-only
+		// assistant message doesn't count as recovery. The final tool result is
+		// successful to ensure this test actually distinguishes correct behavior.
 		const messages = [
 			toolResult("bash", "permission denied: /etc/shadow"),
 			assistantToolCall("bash"),
-			toolResult("bash", "permission denied: /etc/shadow"),
+			toolResult("bash", "command succeeded"),
 		];
 		const result = detectSubagentError(messages);
 		assert.equal(result.hasError, true,
