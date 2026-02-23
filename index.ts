@@ -548,8 +548,32 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 
 				const ok = results.filter((r) => r.exitCode === 0).length;
 				const downgradeNote = parallelDowngraded ? " (async not supported for parallel)" : "";
+
+				// Aggregate outputs from all parallel tasks
+				const aggregatedOutput = results
+					.map((r, i) => {
+						const header = `=== Task ${i + 1}: ${r.agent} ===`;
+						const output = r.truncation?.text || getFinalOutput(r.messages);
+						const hasOutput = Boolean(output?.trim());
+						const status = r.exitCode !== 0
+							? `⚠️ FAILED (exit code ${r.exitCode})${r.error ? `: ${r.error}` : ""}`
+							: r.error
+								? `⚠️ WARNING: ${r.error}`
+								: !hasOutput
+									? "⚠️ EMPTY OUTPUT"
+									: "";
+						const body = status
+							? (hasOutput ? `${status}\n${output}` : status)
+							: output;
+						return `${header}\n${body}`;
+					})
+					.join("\n\n");
+
+				const summary = `${ok}/${results.length} succeeded${downgradeNote}`;
+				const fullContent = `${summary}\n\n${aggregatedOutput}`;
+
 				return {
-					content: [{ type: "text", text: `${ok}/${results.length} succeeded${downgradeNote}` }],
+					content: [{ type: "text", text: fullContent }],
 					details: {
 						mode: "parallel",
 						results,
