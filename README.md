@@ -162,6 +162,18 @@ Append `[key=value,...]` to any agent name to override its defaults:
 
 Set `output=false`, `reads=false`, or `skills=false` to explicitly disable.
 
+### Background Execution
+
+Add `--bg` at the end of any slash command to run in the background:
+
+```
+/run scout "full security audit of the codebase" --bg
+/chain scout "analyze auth system" -> planner "design refactor plan" -> worker --bg
+/parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
+```
+
+Background tasks run asynchronously and notify you when complete. Check status with `subagent_status`.
+
 ## Agents Manager
 
 Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — a TUI for browsing, viewing, editing, creating, and launching agents and chains.
@@ -271,9 +283,9 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 |------|---------------|-------|
 | Single | Yes | `{ agent, task }` - agents with `output` write to temp dir |
 | Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
-| Parallel | Sync only | `{ tasks: [{agent, task}...] }` - auto-downgrades if async requested |
+| Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 
-Chain defaults to sync with TUI clarification. Use `clarify: false` to enable async. Chains with parallel steps (`{ parallel: [...] }`) are fully supported in async mode — parallel tasks run concurrently with configurable `concurrency` and `failFast` options.
+All modes support background/async execution. For programmatic async, use `clarify: false, async: true`. For interactive async, use `clarify: true` and press `b` in the TUI to toggle background mode before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
 **Clarify TUI for single/parallel:**
 
@@ -290,13 +302,14 @@ Single and parallel modes also support the clarify TUI for previewing/editing pa
 **Clarification TUI keybindings:**
 
 *Navigation mode:*
-- `Enter` - Run
+- `Enter` - Run (foreground) or launch in background if `b` is toggled on
 - `Esc` - Cancel
 - `↑↓` - Navigate between steps/tasks (parallel, chain)
 - `e` - Edit task/template (all modes)
 - `m` - Select model (all modes)
 - `t` - Select thinking level (all modes)
 - `s` - Select skills (all modes)
+- `b` - Toggle background/async execution (all modes) — shows `[b]g:ON` when enabled
 - `w` - Edit writes/output file (single, chain only)
 - `r` - Edit reads list (chain only)
 - `p` - Toggle progress tracking (chain only)

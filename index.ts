@@ -451,7 +451,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 				const normalized = normalizeSkillInput(params.skill);
 				const chainSkills = normalized === false ? [] : (normalized ?? []);
 				// Use extracted chain execution module
-				return executeChain({
+				const chainResult = await executeChain({
 					chain: params.chain as ChainStep[],
 					task: params.task,
 					agents,
@@ -469,6 +469,33 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 					chainSkills,
 					chainDir: params.chainDir,
 				});
+
+				// User requested async via TUI - dispatch to async executor
+				if (chainResult.requestedAsync) {
+					if (!isAsyncAvailable()) {
+						return {
+							content: [{ type: "text", text: "Background mode requires jiti for TypeScript execution but it could not be found." }],
+							isError: true,
+							details: { mode: "chain" as const, results: [] },
+						};
+					}
+					const id = randomUUID();
+					const asyncCtx = { pi, cwd: ctx.cwd, currentSessionId: currentSessionId! };
+					return executeAsyncChain(id, {
+						chain: chainResult.requestedAsync.chain,
+						agents,
+						ctx: asyncCtx,
+						cwd: params.cwd,
+						maxOutput: params.maxOutput,
+						artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+						artifactConfig,
+						shareEnabled,
+						sessionRoot,
+						chainSkills: chainResult.requestedAsync.chainSkills,
+					});
+				}
+
+				return chainResult;
 			}
 
 			if (hasTasks && params.tasks) {
@@ -544,6 +571,39 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 						const override = result.behaviorOverrides[i];
 						if (override?.model) modelOverrides[i] = override.model;
 						if (override?.skills !== undefined) skillOverrides[i] = override.skills;
+					}
+
+					// User requested background execution
+					if (result.runInBackground) {
+						if (!isAsyncAvailable()) {
+							return {
+								content: [{ type: "text", text: "Background mode requires jiti for TypeScript execution but it could not be found." }],
+								isError: true,
+								details: { mode: "parallel" as const, results: [] },
+							};
+						}
+						const id = randomUUID();
+						const asyncCtx = { pi, cwd: ctx.cwd, currentSessionId: currentSessionId! };
+						// Convert parallel tasks to a chain with a single parallel step
+						const parallelTasks = params.tasks!.map((t, i) => ({
+							agent: t.agent,
+							task: tasks[i],
+							cwd: t.cwd,
+							...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
+							...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
+						}));
+						return executeAsyncChain(id, {
+							chain: [{ parallel: parallelTasks }],
+							agents,
+							ctx: asyncCtx,
+							cwd: params.cwd,
+							maxOutput: params.maxOutput,
+							artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+							artifactConfig,
+							shareEnabled,
+							sessionRoot,
+							chainSkills: [],
+						});
 					}
 				}
 
@@ -691,6 +751,33 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 					if (override?.model) modelOverride = override.model;
 					if (override?.output !== undefined) effectiveOutput = override.output;
 					if (override?.skills !== undefined) skillOverride = override.skills;
+
+					// User requested background execution
+					if (result.runInBackground) {
+						if (!isAsyncAvailable()) {
+							return {
+								content: [{ type: "text", text: "Background mode requires jiti for TypeScript execution but it could not be found." }],
+								isError: true,
+								details: { mode: "single" as const, results: [] },
+							};
+						}
+						const id = randomUUID();
+						const asyncCtx = { pi, cwd: ctx.cwd, currentSessionId: currentSessionId! };
+						return executeAsyncSingle(id, {
+							agent: params.agent!,
+							task,
+							agentConfig,
+							ctx: asyncCtx,
+							cwd: params.cwd,
+							maxOutput: params.maxOutput,
+							artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+							artifactConfig,
+							shareEnabled,
+							sessionRoot,
+							skills: skillOverride === false ? [] : skillOverride,
+							output: effectiveOutput,
+						});
+					}
 				}
 
 				const cleanTask = task;
@@ -921,6 +1008,15 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
 	};
 
+	/** Extract --bg flag from end of args, return cleaned args and whether flag was present */
+	const extractBgFlag = (args: string): { args: string; bg: boolean } => {
+		// Only match --bg at the very end to avoid false positives in quoted strings
+		if (args.endsWith(" --bg") || args === "--bg") {
+			return { args: args.slice(0, args.length - (args === "--bg" ? 4 : 5)).trim(), bg: true };
+		}
+		return { args, bg: false };
+	};
+
 	const setupDirectRun = (ctx: ExtensionContext) => {
 		const runId = randomUUID().slice(0, 8);
 		const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
@@ -980,7 +1076,35 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 				...(i === 0 ? { task: result.task } : {}),
 			}));
 			executeChain({ chain, task: result.task, agents, ctx, ...exec, clarify: true })
-				.then((r) => pi.sendUserMessage(r.content[0]?.text || "(no output)"))
+				.then((r) => {
+					// User requested async via TUI - dispatch to async executor
+					if (r.requestedAsync) {
+						if (!isAsyncAvailable()) {
+							pi.sendUserMessage("Background mode requires jiti for TypeScript execution but it could not be found.");
+							return;
+						}
+						const id = randomUUID();
+						const asyncCtx = { pi, cwd: ctx.cwd, currentSessionId: ctx.sessionManager.getSessionId() ?? id };
+						const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
+						executeAsyncChain(id, {
+							chain: r.requestedAsync.chain,
+							agents,
+							ctx: asyncCtx,
+							maxOutput: undefined,
+							artifactsDir: exec.artifactsDir,
+							artifactConfig: exec.artifactConfig,
+							shareEnabled: false,
+							sessionRoot,
+							chainSkills: r.requestedAsync.chainSkills,
+						}).then((asyncResult) => {
+							pi.sendUserMessage(asyncResult.content[0]?.text || "(launched in background)");
+						}).catch((err) => {
+							pi.sendUserMessage(`Async launch failed: ${err instanceof Error ? err.message : String(err)}`);
+						});
+						return;
+					}
+					pi.sendUserMessage(r.content[0]?.text || "(no output)");
+				})
 				.catch((err) => pi.sendUserMessage(`Chain failed: ${err instanceof Error ? err.message : String(err)}`));
 			return;
 		}
@@ -1017,15 +1141,16 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 	});
 
 	pi.registerCommand("run", {
-		description: "Run a subagent directly: /run agent[output=file] task",
+		description: "Run a subagent directly: /run agent[output=file] task [--bg]",
 		getArgumentCompletions: makeAgentCompletions(false),
 		handler: async (args, ctx) => {
-			const input = args.trim();
+			const { args: cleanedArgs, bg } = extractBgFlag(args);
+			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task>", "error"); return; }
+			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task> [--bg]", "error"); return; }
 			const { name: agentName, config: inline } = parseAgentToken(input.slice(0, firstSpace));
 			const task = input.slice(firstSpace + 1).trim();
-			if (!task) { ctx.ui.notify("Usage: /run <agent> <task>", "error"); return; }
+			if (!task) { ctx.ui.notify("Usage: /run <agent> <task> [--bg]", "error"); return; }
 
 			const agents = discoverAgents(baseCwd, "both").agents;
 			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
@@ -1038,6 +1163,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 			if (inline.output !== undefined) params.output = inline.output;
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
+			if (bg) params.async = true;
 			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ ...params, agentScope: "both" })}`);
 		},
 	});
@@ -1115,10 +1241,11 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 	};
 
 	pi.registerCommand("chain", {
-		description: "Run agents in sequence: /chain scout \"scan code\" -> planner \"analyze auth\"",
+		description: "Run agents in sequence: /chain scout \"task\" -> planner [--bg]",
 		getArgumentCompletions: makeAgentCompletions(true),
 		handler: async (args, ctx) => {
-			const parsed = parseAgentArgs(args, "chain", ctx);
+			const { args: cleanedArgs, bg } = extractBgFlag(args);
+			const parsed = parseAgentArgs(cleanedArgs, "chain", ctx);
 			if (!parsed) return;
 			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
 				agent: name,
@@ -1129,15 +1256,18 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
-			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ chain, task: parsed.task, clarify: false, agentScope: "both" })}`);
+			const params: Record<string, unknown> = { chain, task: parsed.task, clarify: false, agentScope: "both" };
+			if (bg) params.async = true;
+			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify(params)}`);
 		},
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run agents in parallel: /parallel scout \"scan bugs\" -> reviewer \"check style\"",
+		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg]",
 		getArgumentCompletions: makeAgentCompletions(true),
 		handler: async (args, ctx) => {
-			const parsed = parseAgentArgs(args, "parallel", ctx);
+			const { args: cleanedArgs, bg } = extractBgFlag(args);
+			const parsed = parseAgentArgs(cleanedArgs, "parallel", ctx);
 			if (!parsed) return;
 			if (parsed.steps.length > MAX_PARALLEL) { ctx.ui.notify(`Max ${MAX_PARALLEL} parallel tasks`, "error"); return; }
 			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
@@ -1149,7 +1279,9 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
-			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ chain: [{ parallel: tasks }], task: parsed.task, clarify: false, agentScope: "both" })}`);
+			const params: Record<string, unknown> = { chain: [{ parallel: tasks }], task: parsed.task, clarify: false, agentScope: "both" };
+			if (bg) params.async = true;
+			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify(params)}`);
 		},
 	});
 
