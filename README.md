@@ -715,10 +715,16 @@ Async events:
 ├── artifacts.ts                  # Artifact management
 ├── formatters.ts                 # Output formatting utilities
 ├── schemas.ts                    # TypeBox parameter schemas
-├── utils.ts                      # Shared utility functions
+├── utils.ts                      # Shared utility functions (mapConcurrent, readStatus, etc.)
 ├── types.ts                      # Shared types and constants
 ├── subagent-runner.ts            # Async runner (detached process)
+├── parallel-utils.ts             # Parallel execution utilities for async runner
+├── pi-spawn.ts                   # Cross-platform pi CLI spawning
+├── single-output.ts              # Solo agent output file handling
 ├── notify.ts                     # Async completion notifications
+├── completion-dedupe.ts          # Completion deduplication for notifications
+├── file-coalescer.ts             # Debounced file write coalescing
+├── jsonl-writer.ts               # JSONL event stream writer
 ├── agent-manager.ts              # Overlay orchestrator, screen routing, CRUD
 ├── agent-manager-list.ts         # List screen (search, multi-select, progressive footer)
 ├── agent-manager-detail.ts       # Detail screen (resolved prompt, runs, fields)
@@ -727,6 +733,8 @@ Async events:
 ├── agent-manager-chain-detail.ts # Chain detail screen (flow visualization)
 ├── agent-management.ts           # Management action handlers (list, get, create, update, delete)
 ├── agent-serializer.ts           # Serialize agents to markdown frontmatter
+├── agent-scope.ts                # Agent scope resolution utilities
+├── agent-selection.ts            # Agent selection state management
 ├── agent-templates.ts            # Agent/chain creation templates
 ├── render-helpers.ts             # Shared pad/row/header/footer helpers
 ├── run-history.ts                # Per-agent run recording (JSONL)
