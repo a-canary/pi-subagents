@@ -1,20 +1,35 @@
 /**
- * Rendering functions for subagent results
+ * Compact tree rendering for subagent results.
+ *
+ * Displays subagent execution as a dense, scannable tree inspired by
+ * htop / docker ps — one line per agent with aligned columns:
+ *
+ *   ⛓ chain  3 agents  22.4k tok  31.2s  $0.09
+ *   ├ ✓ scout     sonnet-4   3.2k tok   2.1s  $0.01  Found 12 files
+ *   ├ ✓ planner   sonnet-4   8.0k tok  12.4s  $0.04  Plan: 6 steps
+ *   ╰ ✓ builder   sonnet-4  11.2k tok  16.7s  $0.04  3 files changed
  */
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { getMarkdownTheme, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, truncateToWidth, visibleWidth, type Widget } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Container, Text, Spacer, visibleWidth } from "@mariozechner/pi-tui";
 import {
 	type AsyncJobState,
 	type Details,
+	type SingleResult,
+	type AgentProgress,
+	type ProgressSummary,
 	MAX_WIDGET_JOBS,
 	WIDGET_KEY,
 } from "./types.js";
-import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.js";
-import { getFinalOutput, getDisplayItems, getOutputTail, getLastActivity } from "./utils.js";
+import { formatDuration, shortenPath } from "./formatters.js";
+import { getFinalOutput, getOutputTail, getLastActivity } from "./utils.js";
 
 type Theme = ExtensionContext["ui"]["theme"];
+
+// ============================================================================
+// Helpers
+// ============================================================================
 
 function getTermWidth(): number {
 	return process.stdout.columns || 120;
@@ -25,95 +40,313 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /**
  * Truncate a line to maxWidth, preserving ANSI styling through the ellipsis.
- * 
- * pi-tui's truncateToWidth adds \x1b[0m before ellipsis which resets all styling,
- * causing background color bleed in the TUI. This implementation tracks active
- * ANSI styles and re-applies them before the ellipsis.
- * 
- * Uses Intl.Segmenter for proper Unicode/emoji handling (not char-by-char).
  */
 function truncLine(text: string, maxWidth: number): string {
 	if (visibleWidth(text) <= maxWidth) return text;
 
-	const targetWidth = maxWidth - 1; // Room for single ellipsis character
+	const targetWidth = maxWidth - 1;
 	let result = "";
 	let currentWidth = 0;
-	let activeStyles: string[] = []; // Track ALL active styles (not just last)
+	let activeStyles: string[] = [];
 	let i = 0;
 
 	while (i < text.length) {
-		// Check for ANSI escape code
 		const ansiMatch = text.slice(i).match(/^\x1b\[[0-9;]*m/);
 		if (ansiMatch) {
 			const code = ansiMatch[0];
 			result += code;
-
 			if (code === "\x1b[0m" || code === "\x1b[m") {
-				activeStyles = []; // Reset clears all styles
+				activeStyles = [];
 			} else {
-				activeStyles.push(code); // Stack styles (bold + color, etc.)
+				activeStyles.push(code);
 			}
 			i += code.length;
 			continue;
 		}
 
-		// Find end of non-ANSI text segment
 		let end = i;
 		while (end < text.length && !text.slice(end).match(/^\x1b\[[0-9;]*m/)) {
 			end++;
 		}
 
-		// Segment into graphemes for proper Unicode handling
 		const textPortion = text.slice(i, end);
 		for (const seg of segmenter.segment(textPortion)) {
 			const grapheme = seg.segment;
 			const graphemeWidth = visibleWidth(grapheme);
-
 			if (currentWidth + graphemeWidth > targetWidth) {
-				// Re-apply all active styles before ellipsis to preserve background/colors
 				return result + activeStyles.join("") + "…";
 			}
-
 			result += grapheme;
 			currentWidth += graphemeWidth;
 		}
 		i = end;
 	}
 
-	// Reached end without exceeding width (shouldn't happen given initial check)
 	return result + activeStyles.join("") + "…";
 }
 
-// Track last rendered widget state to avoid no-op re-renders
-let lastWidgetHash = "";
+/**
+ * Shorten model name: "anthropic/claude-sonnet-4-20250514" → "sonnet-4"
+ * Strip provider prefix and date suffix.
+ */
+function shortModel(model: string | undefined): string {
+	if (!model) return "·";
+	// Strip provider prefix
+	let m = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+	// Strip date suffix like -20250514
+	m = m.replace(/-\d{8}$/, "");
+	// Strip common vendor prefixes for brevity
+	m = m.replace(/^claude-/, "");
+	// Strip thinking suffixes
+	m = m.replace(/:(off|minimal|low|medium|high|xhigh)$/, "");
+	return m;
+}
+
+/** Compact token formatting: 482, 3.2k, 48k */
+function fmtTok(n: number | undefined): string {
+	if (!n) return "·";
+	if (n < 1000) return `${n}`;
+	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+	return `${Math.round(n / 1000)}k`;
+}
+
+/** Compact duration: 8.2s, 1m24s, 1h12m */
+function fmtDur(ms: number | undefined): string {
+	if (!ms) return "·";
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+	const m = Math.floor(ms / 60000);
+	const s = Math.floor((ms % 60000) / 1000);
+	if (m < 60) return `${m}m${s.toString().padStart(2, "0")}s`;
+	const h = Math.floor(m / 60);
+	return `${h}h${(m % 60).toString().padStart(2, "0")}m`;
+}
+
+/** Cost: $0.01 or · */
+function fmtCost(cost: number | undefined): string {
+	if (!cost) return "";
+	if (cost < 0.01) return `$${cost.toFixed(4)}`;
+	if (cost < 1) return `$${cost.toFixed(2)}`;
+	return `$${cost.toFixed(2)}`;
+}
 
 /**
- * Compute a simple hash of job states for change detection
+ * Get the effective progress info from a result.
  */
+function getProgress(r: SingleResult): AgentProgress | ProgressSummary | undefined {
+	return r.progress || r.progressSummary;
+}
+
+function isAgentProgress(p: AgentProgress | ProgressSummary | undefined): p is AgentProgress {
+	return !!p && "status" in p;
+}
+
+/**
+ * Determine the status of a result.
+ */
+type AgentStatus = "running" | "done" | "failed" | "pending";
+
+function getStatus(r: SingleResult | undefined): AgentStatus {
+	if (!r) return "pending";
+	const prog = r.progress;
+	if (prog?.status === "running") return "running";
+	if (r.exitCode !== 0) return "failed";
+	return "done";
+}
+
+function statusIcon(s: AgentStatus, theme: Theme): string {
+	switch (s) {
+		case "done":    return theme.fg("success", "✓");
+		case "failed":  return theme.fg("error", "✗");
+		case "running": return theme.fg("accent", "●");
+		case "pending": return theme.fg("dim", "○");
+	}
+}
+
+function agentNameStyled(name: string, status: AgentStatus, theme: Theme): string {
+	switch (status) {
+		case "done":    return theme.bold(theme.fg("success", name));
+		case "failed":  return theme.bold(theme.fg("error", name));
+		case "running": return theme.bold(theme.fg("accent", name));
+		case "pending": return theme.fg("dim", name);
+	}
+}
+
+/**
+ * Get a short activity/summary string for the last column.
+ */
+function getActivity(r: SingleResult | undefined, status: AgentStatus, theme: Theme): string {
+	if (!r) return theme.fg("dim", "waiting");
+
+	if (status === "running") {
+		const prog = r.progress;
+		if (prog?.currentTool) {
+			const toolName = prog.currentTool;
+			const args = prog.currentToolArgs || "";
+			const shortArgs = args.length > 35 ? args.slice(0, 35) + "…" : args;
+			return `${theme.fg("toolTitle", "⚙ " + toolName)}${shortArgs ? theme.fg("muted", "(" + shortArgs + ")") : ""}`;
+		}
+		return theme.fg("muted", "⚙ thinking…");
+	}
+
+	if (status === "failed") {
+		const lastOutput = getFinalOutput(r.messages).split("\n").filter(Boolean).pop() || "";
+		const errText = lastOutput || r.error || "failed";
+		return theme.fg("error", `exit ${r.exitCode}: ${errText}`);
+	}
+
+	// Done — show last meaningful output line
+	const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
+	if (!output) return theme.fg("success", "✓ done");
+	const lastLine = output.split("\n").filter(Boolean).pop() || "";
+	return lastLine;
+}
+
+// ============================================================================
+// Tree drawing
+// ============================================================================
+
+/** Tree connector characters */
+const TREE = {
+	branch: "├",
+	last:   "╰",
+	pipe:   "│",
+	space:  " ",
+} as const;
+
+function treeChar(index: number, total: number, theme: Theme): string {
+	const ch = index === total - 1 ? TREE.last : TREE.branch;
+	return theme.fg("border", ch) + " ";
+}
+
+function nestedTreeChar(index: number, total: number, theme: Theme): string {
+	const ch = index === total - 1 ? TREE.last : TREE.branch;
+	return theme.fg("border", TREE.pipe + " " + ch) + " ";
+}
+
+// ============================================================================
+// Line builder with column alignment
+// ============================================================================
+
+interface ColumnWidths {
+	name: number;
+	model: number;
+}
+
+function computeColumnWidths(results: SingleResult[], chainAgents?: string[]): ColumnWidths {
+	let maxName = 0;
+	let maxModel = 0;
+	for (const r of results) {
+		maxName = Math.max(maxName, r.agent.length);
+		maxModel = Math.max(maxModel, shortModel(r.model).length);
+	}
+	if (chainAgents) {
+		for (const name of chainAgents) {
+			// Handle parallel agent format "[a+b]"
+			if (name.startsWith("[")) continue;
+			maxName = Math.max(maxName, name.length);
+		}
+	}
+	return {
+		name: Math.max(maxName, 6),   // min 6 for readability
+		model: Math.max(maxModel, 3), // min 3
+	};
+}
+
+/**
+ * Build a single agent status line with aligned columns.
+ *
+ *   {prefix}{icon} {name}  {model}  {tokens}  {dur}  {cost}  {activity}
+ */
+function buildAgentLine(
+	prefix: string,
+	r: SingleResult | undefined,
+	agentName: string,
+	cols: ColumnWidths,
+	theme: Theme,
+	w: number,
+): string {
+	const status = getStatus(r);
+	const icon = statusIcon(status, theme);
+	const name = agentNameStyled(agentName.padEnd(cols.name), status, theme);
+
+	if (!r || status === "pending") {
+		const model = theme.fg("dim", "·".padEnd(cols.model));
+		const tok   = theme.fg("dim", "·".padStart(7));
+		const dur   = theme.fg("dim", "·".padStart(6));
+		const act   = theme.fg("dim", "waiting");
+		return truncLine(`${prefix}${icon} ${name}  ${model}  ${tok}  ${dur}        ${act}`, w);
+	}
+
+	const prog = getProgress(r);
+	const tokens = prog ? prog.tokens : (r.usage.input + r.usage.output);
+	const duration = prog?.durationMs ?? 0;
+	const cost = r.usage.cost;
+
+	const modelStr   = theme.fg("muted", shortModel(r.model).padEnd(cols.model));
+	const tokStr     = theme.fg("dim", (fmtTok(tokens) + " tok").padStart(9));
+	const durStr     = theme.fg("dim", fmtDur(duration).padStart(6));
+	const costStr    = cost ? theme.fg("dim", fmtCost(cost).padStart(7)) : "       ";
+	const activity   = getActivity(r, status, theme);
+
+	return truncLine(`${prefix}${icon} ${name}  ${modelStr}  ${tokStr}  ${durStr}  ${costStr}  ${activity}`, w);
+}
+
+/**
+ * Build a header line for chain/parallel modes.
+ *
+ *   {icon} {mode}  {count} agents  {tokens}  {dur}  {cost}
+ */
+function buildHeaderLine(
+	mode: string,
+	icon: string,
+	results: SingleResult[],
+	progress: AgentProgress[] | undefined,
+	isChain: boolean,
+	theme: Theme,
+	w: number,
+): string {
+	const count = results.length;
+	const hasRunning = results.some(r => getStatus(r) === "running")
+		|| progress?.some(p => p.status === "running");
+	const allDone = results.length > 0 && results.every(r => getStatus(r) === "done");
+	const hasFailed = results.some(r => getStatus(r) === "failed");
+
+	// Aggregate stats
+	let totalTokens = 0;
+	let totalDuration = 0;
+	let totalCost = 0;
+	for (const r of results) {
+		const prog = getProgress(r);
+		totalTokens += prog ? prog.tokens : (r.usage.input + r.usage.output);
+		const dur = prog?.durationMs ?? 0;
+		totalDuration = isChain ? totalDuration + dur : Math.max(totalDuration, dur);
+		totalCost += r.usage.cost ?? 0;
+	}
+
+	const headerColor = hasRunning ? "accent" : hasFailed ? "error" : allDone ? "success" : "dim";
+	const modeLabel = theme.bold(theme.fg(headerColor as any, `${icon} ${mode}`));
+	const countStr = theme.fg("dim", `${count} agent${count !== 1 ? "s" : ""}`);
+	const tokStr = totalTokens ? theme.fg("dim", fmtTok(totalTokens) + " tok") : "";
+	const durStr = totalDuration ? theme.fg("dim", fmtDur(totalDuration)) : "";
+	const costStr = totalCost ? theme.fg("dim", fmtCost(totalCost)) : "";
+
+	const parts = [modeLabel, countStr, tokStr, durStr, costStr].filter(Boolean);
+	return truncLine(parts.join("  "), w);
+}
+
+// ============================================================================
+// Async widget (compact)
+// ============================================================================
+
+let lastWidgetHash = "";
+
 function computeWidgetHash(jobs: AsyncJobState[]): string {
 	return jobs.slice(0, MAX_WIDGET_JOBS).map(job =>
 		`${job.asyncId}:${job.status}:${job.currentStep}:${job.updatedAt}:${job.totalTokens?.total ?? 0}`
 	).join("|");
 }
 
-function extractOutputTarget(task: string): string | undefined {
-	const writeToMatch = task.match(/\[Write to:\s*([^\]\n]+)\]/i);
-	if (writeToMatch?.[1]?.trim()) return writeToMatch[1].trim();
-	const findingsMatch = task.match(/Write your findings to:\s*(\S+)/i);
-	if (findingsMatch?.[1]?.trim()) return findingsMatch[1].trim();
-	const outputMatch = task.match(/[Oo]utput(?:\s+to)?\s*:\s*(\S+)/i);
-	if (outputMatch?.[1]?.trim()) return outputMatch[1].trim();
-	return undefined;
-}
-
-function hasEmptyTextOutputWithoutOutputTarget(task: string, output: string): boolean {
-	if (output.trim()) return false;
-	return !extractOutputTarget(task);
-}
-
-/**
- * Render the async jobs widget
- */
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (!ctx.hasUI) return;
 	if (jobs.length === 0) {
@@ -124,47 +357,43 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		return;
 	}
 
-	// Check if anything changed since last render
-	// Always re-render if any displayed job is running (output tail updates constantly)
 	const displayedJobs = jobs.slice(0, MAX_WIDGET_JOBS);
 	const hasRunningJobs = displayedJobs.some(job => job.status === "running");
 	const newHash = computeWidgetHash(jobs);
-	if (!hasRunningJobs && newHash === lastWidgetHash) {
-		return; // Skip re-render, nothing changed
-	}
+	if (!hasRunningJobs && newHash === lastWidgetHash) return;
 	lastWidgetHash = newHash;
 
 	const theme = ctx.ui.theme;
 	const w = getTermWidth();
 	const lines: string[] = [];
-	lines.push(theme.fg("accent", "Async subagents"));
+	lines.push(theme.fg("accent", "⚡ Async subagents"));
 
 	for (const job of displayedJobs) {
 		const id = job.asyncId.slice(0, 6);
-		const status =
-			job.status === "complete"
-				? theme.fg("success", "complete")
-				: job.status === "failed"
-					? theme.fg("error", "failed")
-					: theme.fg("warning", "running");
+		const status: AgentStatus =
+			job.status === "complete" ? "done"
+			: job.status === "failed" ? "failed"
+			: "running";
 
-		const stepsTotal = job.stepsTotal ?? (job.agents?.length ?? 1);
-		const stepIndex = job.currentStep !== undefined ? job.currentStep + 1 : undefined;
-		const stepText = stepIndex !== undefined ? `step ${stepIndex}/${stepsTotal}` : `steps ${stepsTotal}`;
-		const endTime = (job.status === "complete" || job.status === "failed") ? (job.updatedAt ?? Date.now()) : Date.now();
-		const elapsed = job.startedAt ? formatDuration(endTime - job.startedAt) : "";
-		const agentLabel = job.agents ? job.agents.join(" -> ") : (job.mode ?? "single");
-
-		const tokenText = job.totalTokens ? ` | ${formatTokens(job.totalTokens.total)} tok` : "";
+		const icon = statusIcon(status, theme);
+		const agentLabel = job.agents ? job.agents.join(" → ") : (job.mode ?? "single");
+		const elapsed = job.startedAt ? fmtDur(
+			((job.status === "complete" || job.status === "failed") ? (job.updatedAt ?? Date.now()) : Date.now()) - job.startedAt,
+		) : "·";
+		const tokStr = job.totalTokens ? fmtTok(job.totalTokens.total) + " tok" : "";
 		const activityText = job.status === "running" ? getLastActivity(job.outputFile) : "";
-		const activitySuffix = activityText ? ` | ${theme.fg("dim", activityText)}` : "";
+		const activitySuffix = activityText ? theme.fg("dim", ` ⚙ ${activityText}`) : "";
 
-		lines.push(truncLine(`- ${id} ${status} | ${agentLabel} | ${stepText}${elapsed ? ` | ${elapsed}` : ""}${tokenText}${activitySuffix}`, w));
+		lines.push(truncLine(
+			`  ${icon} ${theme.fg("dim", id)}  ${agentLabel}  ${theme.fg("dim", elapsed)}${tokStr ? "  " + theme.fg("dim", tokStr) : ""}${activitySuffix}`,
+			w,
+		));
 
+		// Show output tail for running jobs
 		if (job.status === "running" && job.outputFile) {
-			const tail = getOutputTail(job.outputFile, 3);
+			const tail = getOutputTail(job.outputFile, 2);
 			for (const line of tail) {
-				lines.push(truncLine(theme.fg("dim", `  > ${line}`), w));
+				lines.push(truncLine(theme.fg("dim", `    > ${line}`), w));
 			}
 		}
 	}
@@ -172,269 +401,170 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	ctx.ui.setWidget(WIDGET_KEY, lines);
 }
 
-/**
- * Render a subagent result
- */
+// ============================================================================
+// Tool result rendering — compact tree
+// ============================================================================
+
 export function renderSubagentResult(
 	result: AgentToolResult<Details>,
 	_options: { expanded: boolean },
 	theme: Theme,
-): Widget {
+): Container {
 	const d = result.details;
+	const w = getTermWidth() - 4;
+	const c = new Container();
+
 	if (!d || !d.results.length) {
 		const t = result.content[0];
 		const text = t?.type === "text" ? t.text : "(no output)";
-		return new Text(truncLine(text, getTermWidth() - 4), 0, 0);
-	}
-
-	const mdTheme = getMarkdownTheme();
-
-	if (d.mode === "single" && d.results.length === 1) {
-		const r = d.results[0];
-		const isRunning = r.progress?.status === "running";
-		const icon = isRunning
-			? theme.fg("warning", "...")
-			: r.exitCode === 0
-				? theme.fg("success", "ok")
-				: theme.fg("error", "X");
-		const output = r.truncation?.text || getFinalOutput(r.messages);
-
-		const progressInfo = isRunning && r.progress
-			? ` | ${r.progress.toolCount} tools, ${formatTokens(r.progress.tokens)} tok, ${formatDuration(r.progress.durationMs)}`
-			: r.progressSummary
-				? ` | ${r.progressSummary.toolCount} tools, ${formatTokens(r.progressSummary.tokens)} tok, ${formatDuration(r.progressSummary.durationMs)}`
-				: "";
-
-		const w = getTermWidth() - 4;
-		const c = new Container();
-		c.addChild(new Text(truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${progressInfo}`, w), 0, 0));
-		c.addChild(new Spacer(1));
-		const taskMaxLen = Math.max(20, w - 8);
-		const taskPreview = r.task.length > taskMaxLen
-			? `${r.task.slice(0, taskMaxLen)}...`
-			: r.task;
-		c.addChild(
-			new Text(truncLine(theme.fg("dim", `Task: ${taskPreview}`), w), 0, 0),
-		);
-		c.addChild(new Spacer(1));
-
-		const items = getDisplayItems(r.messages);
-		for (const item of items) {
-			if (item.type === "tool")
-				c.addChild(new Text(truncLine(theme.fg("muted", formatToolCall(item.name, item.args)), w), 0, 0));
-		}
-		if (items.length) c.addChild(new Spacer(1));
-
-		if (output) c.addChild(new Markdown(output, 0, 0, mdTheme));
-		c.addChild(new Spacer(1));
-		if (r.skills?.length) {
-			c.addChild(new Text(truncLine(theme.fg("dim", `Skills: ${r.skills.join(", ")}`), w), 0, 0));
-		}
-		if (r.skillsWarning) {
-			c.addChild(new Text(truncLine(theme.fg("warning", `⚠️ ${r.skillsWarning}`), w), 0, 0));
-		}
-		c.addChild(new Text(truncLine(theme.fg("dim", formatUsage(r.usage, r.model)), w), 0, 0));
-		if (r.sessionFile) {
-			c.addChild(new Text(truncLine(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`), w), 0, 0));
-		}
-
-		if (r.artifactPaths) {
-			c.addChild(new Spacer(1));
-			c.addChild(new Text(truncLine(theme.fg("dim", `Artifacts: ${shortenPath(r.artifactPaths.outputPath)}`), w), 0, 0));
-		}
+		c.addChild(new Text(truncLine(text, w), 0, 0));
 		return c;
 	}
 
-	const hasRunning = d.progress?.some((p) => p.status === "running") 
-		|| d.results.some((r) => r.progress?.status === "running");
-	const ok = d.results.filter((r) => r.progress?.status === "completed" || (r.exitCode === 0 && r.progress?.status !== "running")).length;
-	const hasEmptyWithoutTarget = d.results.some((r) =>
-		r.exitCode === 0
-		&& r.progress?.status !== "running"
-		&& hasEmptyTextOutputWithoutOutputTarget(r.task, getFinalOutput(r.messages)),
-	);
-	const icon = hasRunning
-		? theme.fg("warning", "...")
-		: hasEmptyWithoutTarget
-			? theme.fg("warning", "⚠")
-			: ok === d.results.length
-				? theme.fg("success", "ok")
-				: theme.fg("error", "X");
+	// ── Single agent ──
+	if (d.mode === "single" && d.results.length === 1) {
+		const r = d.results[0];
+		const cols = computeColumnWidths(d.results);
+		c.addChild(new Text(buildAgentLine("", r, r.agent, cols, theme, w), 0, 0));
 
-	const totalSummary =
-		d.progressSummary ||
-		d.results.reduce(
-			(acc, r) => {
-				const prog = r.progress || r.progressSummary;
-				if (prog) {
-					acc.toolCount += prog.toolCount;
-					acc.tokens += prog.tokens;
-					acc.durationMs =
-						d.mode === "chain"
-							? acc.durationMs + prog.durationMs
-							: Math.max(acc.durationMs, prog.durationMs);
+		// Show output below for completed/failed single agents
+		const status = getStatus(r);
+		if (status === "done" || status === "failed") {
+			const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
+			if (output) {
+				c.addChild(new Spacer(1));
+				// Show last N meaningful lines, indented
+				const lines = output.split("\n").filter(Boolean);
+				const showLines = lines.slice(-8);
+				for (const line of showLines) {
+					c.addChild(new Text(truncLine(theme.fg("dim", "  " + line), w), 0, 0));
 				}
-				return acc;
-			},
-			{ toolCount: 0, tokens: 0, durationMs: 0 },
-		);
+				if (lines.length > 8) {
+					c.addChild(new Text(theme.fg("dim", `  … ${lines.length - 8} more lines`), 0, 0));
+				}
+			}
+		}
 
-	const summaryStr =
-		totalSummary.toolCount || totalSummary.tokens
-			? ` | ${totalSummary.toolCount} tools, ${formatTokens(totalSummary.tokens)} tok, ${formatDuration(totalSummary.durationMs)}`
-			: "";
+		// Footer: usage + session
+		c.addChild(new Spacer(1));
+		const footerParts: string[] = [];
+		if (r.usage.turns) footerParts.push(`${r.usage.turns} turn${r.usage.turns > 1 ? "s" : ""}`);
+		if (r.usage.input)  footerParts.push(`in:${fmtTok(r.usage.input)}`);
+		if (r.usage.output) footerParts.push(`out:${fmtTok(r.usage.output)}`);
+		if (r.usage.cacheRead)  footerParts.push(`R${fmtTok(r.usage.cacheRead)}`);
+		if (r.usage.cacheWrite) footerParts.push(`W${fmtTok(r.usage.cacheWrite)}`);
+		if (r.skills?.length) footerParts.push(`skills: ${r.skills.join(", ")}`);
+		if (r.sessionFile) footerParts.push(`session: ${shortenPath(r.sessionFile)}`);
+		if (footerParts.length) {
+			c.addChild(new Text(truncLine(theme.fg("dim", footerParts.join("  ")), w), 0, 0));
+		}
 
-	const modeLabel = d.mode;
-	// For parallel-in-chain, show task count (results) for consistency with step display
-	// For sequential chains, show logical step count
-	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
-	const totalCount = hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length);
-	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : ok + 1;
-	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
-	
-	// Build chain visualization: "scout → planner" with status icons
-	// Note: Only works correctly for sequential chains. Chains with parallel steps
-	// (indicated by "[agent1+agent2]" format) have multiple results per step,
-	// breaking the 1:1 mapping between chainAgents and results.
-	const chainVis = d.chainAgents?.length && !hasParallelInChain
-		? d.chainAgents
-				.map((agent, i) => {
-					const result = d.results[i];
-					const isFailed = result && result.exitCode !== 0 && result.progress?.status !== "running";
-					const isComplete = result && result.exitCode === 0 && result.progress?.status !== "running";
-					const isEmptyWithoutTarget = Boolean(result)
-						&& Boolean(isComplete)
-						&& hasEmptyTextOutputWithoutOutputTarget(result.task, getFinalOutput(result.messages));
-					const isCurrent = i === (d.currentStepIndex ?? d.results.length);
-					const stepIcon = isFailed
-						? theme.fg("error", "✗")
-						: isEmptyWithoutTarget
-							? theme.fg("warning", "⚠")
-							: isComplete
-								? theme.fg("success", "✓")
-								: isCurrent && hasRunning
-									? theme.fg("warning", "●")
-									: theme.fg("dim", "○");
-					return `${stepIcon} ${agent}`;
-				})
-				.join(theme.fg("dim", " → "))
-		: null;
-
-	const w = getTermWidth() - 4;
-	const c = new Container();
-	c.addChild(
-		new Text(
-			truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${stepInfo}${summaryStr}`, w),
-			0,
-			0,
-		),
-	);
-	// Show chain visualization
-	if (chainVis) {
-		c.addChild(new Text(truncLine(`  ${chainVis}`, w), 0, 0));
+		return c;
 	}
 
-	// === STATIC STEP LAYOUT (like clarification UI) ===
-	// Each step gets a fixed section with task/output/status
-	// Note: For chains with parallel steps, chainAgents indices don't map 1:1 to results
-	// (parallel steps produce multiple results). Fall back to result-based iteration.
-	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
+	// ── Chain or Parallel ──
+	const isChain = d.mode === "chain";
+	const isParallel = d.mode === "parallel";
+	const modeIcon = isChain ? "⛓" : "⫘";
+	const modeLabel = isChain ? "chain" : "parallel";
 
+	// Detect mixed chain with parallel steps
+	const hasParallelInChain = d.chainAgents?.some(a => a.startsWith("["));
+	const cols = computeColumnWidths(d.results, d.chainAgents);
+
+	// Header line
+	c.addChild(new Text(
+		buildHeaderLine(modeLabel, modeIcon, d.results, d.progress, isChain, theme, w),
+		0, 0,
+	));
+
+	if (hasParallelInChain && d.chainAgents?.length) {
+		// Mixed chain: sequential steps + embedded parallel groups
+		renderMixedChain(c, d, cols, theme, w);
+	} else if (d.chainAgents?.length && isChain) {
+		// Pure sequential chain
+		const total = d.chainAgents.length;
+		for (let i = 0; i < total; i++) {
+			const agentName = d.chainAgents[i];
+			const r = d.results[i];
+			const prefix = treeChar(i, total, theme);
+			c.addChild(new Text(buildAgentLine(prefix, r, agentName, cols, theme, w), 0, 0));
+		}
+	} else {
+		// Parallel or simple results list
+		const total = d.results.length;
+		for (let i = 0; i < total; i++) {
+			const r = d.results[i];
+			const prefix = treeChar(i, total, theme);
+			c.addChild(new Text(buildAgentLine(prefix, r, r.agent, cols, theme, w), 0, 0));
+		}
+	}
+
+	// Aggregate footer
 	c.addChild(new Spacer(1));
-
-	for (let i = 0; i < stepsToShow; i++) {
-		const r = d.results[i];
-		const agentName = useResultsDirectly 
-			? (r?.agent || `step-${i + 1}`)
-			: (d.chainAgents![i] || r?.agent || `step-${i + 1}`);
-
-		if (!r) {
-			// Pending step
-			c.addChild(new Text(truncLine(theme.fg("dim", `  Step ${i + 1}: ${agentName}`), w), 0, 0));
-			c.addChild(new Text(theme.fg("dim", `    status: ○ pending`), 0, 0));
-			c.addChild(new Spacer(1));
-			continue;
-		}
-
-		const progressFromArray = d.progress?.find((p) => p.index === i) 
-			|| d.progress?.find((p) => p.agent === r.agent && p.status === "running");
-		const rProg = r.progress || progressFromArray || r.progressSummary;
-		const rRunning = rProg?.status === "running";
-
-		const resultOutput = getFinalOutput(r.messages);
-		const statusIcon = rRunning
-			? theme.fg("warning", "●")
-			: r.exitCode !== 0
-				? theme.fg("error", "✗")
-				: hasEmptyTextOutputWithoutOutputTarget(r.task, resultOutput)
-					? theme.fg("warning", "⚠")
-					: theme.fg("success", "✓");
-		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
-		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
-		const stepHeader = rRunning
-			? `${statusIcon} Step ${i + 1}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
-			: `${statusIcon} Step ${i + 1}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
-		c.addChild(new Text(truncLine(stepHeader, w), 0, 0));
-
-		const taskMaxLen = Math.max(20, w - 12);
-		const taskPreview = r.task.length > taskMaxLen
-			? `${r.task.slice(0, taskMaxLen)}...`
-			: r.task;
-		c.addChild(new Text(truncLine(theme.fg("dim", `    task: ${taskPreview}`), w), 0, 0));
-
-		const outputTarget = extractOutputTarget(r.task);
-		if (outputTarget) {
-			c.addChild(new Text(truncLine(theme.fg("dim", `    output: ${outputTarget}`), w), 0, 0));
-		}
-
-		if (r.skills?.length) {
-			c.addChild(new Text(truncLine(theme.fg("dim", `    skills: ${r.skills.join(", ")}`), w), 0, 0));
-		}
-		if (r.skillsWarning) {
-			c.addChild(new Text(truncLine(theme.fg("warning", `    ⚠️ ${r.skillsWarning}`), w), 0, 0));
-		}
-
-		if (rRunning && rProg) {
-			if (rProg.skills?.length) {
-				c.addChild(new Text(truncLine(theme.fg("accent", `    skills: ${rProg.skills.join(", ")}`), w), 0, 0));
-			}
-			// Current tool for running step
-			if (rProg.currentTool) {
-				const maxToolArgsLen = Math.max(50, w - 20);
-				const toolArgsPreview = rProg.currentToolArgs
-					? (rProg.currentToolArgs.length > maxToolArgsLen
-						? `${rProg.currentToolArgs.slice(0, maxToolArgsLen)}...`
-						: rProg.currentToolArgs)
-					: "";
-				const toolLine = toolArgsPreview
-					? `${rProg.currentTool}: ${toolArgsPreview}`
-					: rProg.currentTool;
-				c.addChild(new Text(truncLine(theme.fg("warning", `    > ${toolLine}`), w), 0, 0));
-			}
-			// Recent tools
-			if (rProg.recentTools?.length) {
-				for (const t of rProg.recentTools.slice(0, 3)) {
-					const maxArgsLen = Math.max(40, w - 30);
-					const argsPreview = t.args.length > maxArgsLen
-						? `${t.args.slice(0, maxArgsLen)}...`
-						: t.args;
-					c.addChild(new Text(truncLine(theme.fg("dim", `      ${t.tool}: ${argsPreview}`), w), 0, 0));
-				}
-			}
-			// Recent output - let truncLine handle truncation entirely
-			const recentLines = (rProg.recentOutput ?? []).slice(-5);
-			for (const line of recentLines) {
-				c.addChild(new Text(truncLine(theme.fg("dim", `      ${line}`), w), 0, 0));
-			}
-		}
-
-		c.addChild(new Spacer(1));
-	}
-
+	const allSessions = d.results.filter(r => r.sessionFile).map(r => shortenPath(r.sessionFile!));
 	if (d.artifacts) {
-		c.addChild(new Spacer(1));
-		c.addChild(new Text(truncLine(theme.fg("dim", `Artifacts dir: ${shortenPath(d.artifacts.dir)}`), w), 0, 0));
+		c.addChild(new Text(truncLine(theme.fg("dim", `artifacts: ${shortenPath(d.artifacts.dir)}`), w), 0, 0));
 	}
+	if (allSessions.length === 1) {
+		c.addChild(new Text(truncLine(theme.fg("dim", `session: ${allSessions[0]}`), w), 0, 0));
+	}
+
 	return c;
+}
+
+/**
+ * Render a mixed chain that contains both sequential and parallel steps.
+ * chainAgents format: ["scout", "[builder+writer]", "reviewer"]
+ */
+function renderMixedChain(
+	c: Container,
+	d: Details,
+	cols: ColumnWidths,
+	theme: Theme,
+	w: number,
+): void {
+	const chainAgents = d.chainAgents!;
+	const total = chainAgents.length;
+	let resultIdx = 0;
+
+	for (let stepIdx = 0; stepIdx < total; stepIdx++) {
+		const agentEntry = chainAgents[stepIdx];
+		const prefix = treeChar(stepIdx, total, theme);
+		const isLast = stepIdx === total - 1;
+
+		if (agentEntry.startsWith("[")) {
+			// Parallel group: "[builder+writer]" → ["builder", "writer"]
+			const inner = agentEntry.slice(1, -1).split("+");
+			const parallelResults: SingleResult[] = [];
+			for (let j = 0; j < inner.length; j++) {
+				parallelResults.push(d.results[resultIdx + j]);
+			}
+
+			// Parallel group header
+			const hasRunning = parallelResults.some(r => getStatus(r) === "running");
+			const allDone = parallelResults.every(r => getStatus(r) === "done");
+			const headerColor = hasRunning ? "accent" : allDone ? "success" : "dim";
+			c.addChild(new Text(truncLine(
+				`${prefix}${theme.fg(headerColor as any, "⫘ parallel")}  ${theme.fg("dim", `${inner.length} agents`)}`,
+				w,
+			), 0, 0));
+
+			// Nested parallel children
+			for (let j = 0; j < inner.length; j++) {
+				const nestedPrefix = isLast
+					? `  ${j === inner.length - 1 ? theme.fg("border", TREE.last) : theme.fg("border", TREE.branch)} `
+					: `${theme.fg("border", TREE.pipe)} ${j === inner.length - 1 ? theme.fg("border", TREE.last) : theme.fg("border", TREE.branch)} `;
+				const r = d.results[resultIdx + j];
+				c.addChild(new Text(buildAgentLine(nestedPrefix, r, inner[j], cols, theme, w), 0, 0));
+			}
+
+			resultIdx += inner.length;
+		} else {
+			// Sequential step
+			const r = d.results[resultIdx];
+			c.addChild(new Text(buildAgentLine(prefix, r, agentEntry, cols, theme, w), 0, 0));
+			resultIdx++;
+		}
+	}
 }
