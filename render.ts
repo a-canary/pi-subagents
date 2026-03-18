@@ -439,15 +439,25 @@ function getFullOutput(r: SingleResult): string {
 
 function appendExpandedOutput(c: Container, r: SingleResult, theme: Theme, w: number): void {
 	const output = getFullOutput(r).trim();
-	c.addChild(new Text(truncLine(theme.fg("border", `╔═ ${r.agent} ` + "═".repeat(Math.max(0, 40 - r.agent.length))), w), 0, 0));
+	const innerW = w - 4; // account for "  " prefix + borders
+	const barLen = Math.max(0, w - r.agent.length - 4);
+	const bar = "═".repeat(barLen);
+	c.addChild(new Text(theme.fg("border", `╔═ ${r.agent} ${bar}╗`), 0, 0));
 	if (!output) {
-		c.addChild(new Text(theme.fg("muted", "  (no output)"), 0, 0));
+		c.addChild(new Text(theme.fg("muted", "║  (no output)" + " ".repeat(Math.max(0, w - 16)) + "║"), 0, 0));
 	} else {
 		for (const line of output.split("\n")) {
-			c.addChild(new Text(truncLine("  " + line, w), 0, 0));
+			// Wrap long lines to fit inside the box
+			const segments = line.length > innerW
+				? line.match(new RegExp(`.{1,${innerW}}`, "g")) ?? [line]
+				: [line];
+			for (const seg of segments) {
+				const padded = "║ " + seg + " ".repeat(Math.max(0, innerW - seg.length)) + " ║";
+				c.addChild(new Text(padded, 0, 0));
+			}
 		}
 	}
-	c.addChild(new Text(theme.fg("border", "╚" + "═".repeat(42)), 0, 0));
+	c.addChild(new Text(theme.fg("border", "╚" + "═".repeat(w - 2) + "╝"), 0, 0));
 	c.addChild(new Spacer(1));
 }
 
