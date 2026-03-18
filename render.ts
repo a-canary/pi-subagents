@@ -437,27 +437,41 @@ function getFullOutput(r: SingleResult): string {
 	return parts.join("\n\n");
 }
 
+function wordWrap(text: string, maxLen: number): string[] {
+	if (text.length <= maxLen) return [text];
+	const words = text.split(" ");
+	const lines: string[] = [];
+	let current = "";
+	for (const word of words) {
+		if (!current) {
+			current = word;
+		} else if (current.length + 1 + word.length <= maxLen) {
+			current += " " + word;
+		} else {
+			lines.push(current);
+			current = word;
+		}
+	}
+	if (current) lines.push(current);
+	return lines.length ? lines : [text];
+}
+
 function appendExpandedOutput(c: Container, r: SingleResult, theme: Theme, w: number): void {
 	const output = getFullOutput(r).trim();
-	const innerW = w - 4; // account for "  " prefix + borders
-	const barLen = Math.max(0, w - r.agent.length - 4);
-	const bar = "═".repeat(barLen);
-	c.addChild(new Text(theme.fg("border", `╔═ ${r.agent} ${bar}╗`), 0, 0));
+	const boxW = Math.min(w, 80);
+	const innerW = boxW - 4; // "║ " + content + " ║"
+	const barLen = Math.max(0, boxW - r.agent.length - 4);
+	c.addChild(new Text(theme.fg("border", `╔═ ${r.agent} ${"═".repeat(barLen)}╗`), 0, 0));
 	if (!output) {
-		c.addChild(new Text(theme.fg("muted", "║  (no output)" + " ".repeat(Math.max(0, w - 16)) + "║"), 0, 0));
+		c.addChild(new Text(theme.fg("muted", `║  (no output)${" ".repeat(Math.max(0, innerW - 13))} ║`), 0, 0));
 	} else {
 		for (const line of output.split("\n")) {
-			// Wrap long lines to fit inside the box
-			const segments = line.length > innerW
-				? line.match(new RegExp(`.{1,${innerW}}`, "g")) ?? [line]
-				: [line];
-			for (const seg of segments) {
-				const padded = "║ " + seg + " ".repeat(Math.max(0, innerW - seg.length)) + " ║";
-				c.addChild(new Text(padded, 0, 0));
+			for (const wrapped of wordWrap(line, innerW)) {
+				c.addChild(new Text(`║ ${wrapped}${" ".repeat(Math.max(0, innerW - wrapped.length))} ║`, 0, 0));
 			}
 		}
 	}
-	c.addChild(new Text(theme.fg("border", "╚" + "═".repeat(w - 2) + "╝"), 0, 0));
+	c.addChild(new Text(theme.fg("border", `╚${"═".repeat(boxW - 2)}╝`), 0, 0));
 	c.addChild(new Spacer(1));
 }
 
