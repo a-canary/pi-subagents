@@ -418,8 +418,22 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 // Tool result rendering — compact tree
 // ============================================================================
 
+function getFullOutput(r: SingleResult): string {
+	if (r.truncation?.text) return r.truncation.text;
+	// Concatenate all assistant text blocks in order
+	const parts: string[] = [];
+	for (const msg of r.messages) {
+		if (msg.role === "assistant") {
+			for (const part of msg.content) {
+				if (part.type === "text" && part.text.trim()) parts.push(part.text.trim());
+			}
+		}
+	}
+	return parts.join("\n\n");
+}
+
 function appendExpandedOutput(c: Container, r: SingleResult, theme: Theme, w: number): void {
-	const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
+	const output = getFullOutput(r).trim();
 	if (!output) return;
 	c.addChild(new Spacer(1));
 	for (const line of output.split("\n")) {
@@ -454,7 +468,7 @@ export function renderSubagentResult(
 		// Show output below for completed/failed single agents
 		const status = getStatus(r);
 		if (status === "done" || status === "failed") {
-			const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
+			const output = (expanded ? getFullOutput(r) : (r.truncation?.text || getFinalOutput(r.messages))).trim();
 			if (output) {
 				c.addChild(new Spacer(1));
 				const lines = output.split("\n").filter(Boolean);
