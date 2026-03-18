@@ -195,11 +195,20 @@ function getActivity(r: SingleResult | undefined, status: AgentStatus, theme: Th
 		return theme.fg("error", `exit ${r.exitCode}: ${errText}`);
 	}
 
-	// Done — show last meaningful output line
+	// Done — show compact: {msg30} [<<<|⚙|>>>] {cmd30}
 	const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
-	if (!output) return theme.fg("success", "✓ done");
 	const lastLine = output.split("\n").filter(Boolean).pop() || "";
-	return lastLine;
+	const msg30 = lastLine.length > 30 ? lastLine.slice(0, 30) + "…" : lastLine;
+
+	const recentTools = r.progress?.recentTools;
+	const lastTool = recentTools && recentTools.length > 0 ? recentTools[recentTools.length - 1] : undefined;
+	if (lastTool) {
+		const cmd = (lastTool.tool + " " + lastTool.args).trim();
+		const cmd30 = cmd.length > 30 ? cmd.slice(0, 30) + "…" : cmd;
+		const arrow = theme.fg("accent", "⚙");
+		return `${theme.fg("muted", msg30)} ${theme.fg("dim", "<<<")}${arrow}${theme.fg("dim", ">>>")} ${theme.fg("toolTitle", cmd30)}`;
+	}
+	return msg30 || theme.fg("success", "✓ done");
 }
 
 // ============================================================================
@@ -405,12 +414,23 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 // Tool result rendering — compact tree
 // ============================================================================
 
+function appendExpandedOutput(c: Container, r: SingleResult, theme: Theme, w: number): void {
+	const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
+	if (!output) return;
+	c.addChild(new Spacer(1));
+	for (const line of output.split("\n")) {
+		c.addChild(new Text(truncLine(theme.fg("dim", "    " + line), w), 0, 0));
+	}
+	c.addChild(new Spacer(1));
+}
+
 export function renderSubagentResult(
 	result: AgentToolResult<Details>,
-	_options: { expanded: boolean },
+	options: { expanded: boolean },
 	theme: Theme,
 ): Container {
 	const d = result.details;
+	const expanded = options.expanded;
 	const w = getTermWidth() - 4;
 	const c = new Container();
 
@@ -433,14 +453,13 @@ export function renderSubagentResult(
 			const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
 			if (output) {
 				c.addChild(new Spacer(1));
-				// Show last N meaningful lines, indented
 				const lines = output.split("\n").filter(Boolean);
-				const showLines = lines.slice(-8);
+				const showLines = expanded ? lines : lines.slice(-8);
 				for (const line of showLines) {
 					c.addChild(new Text(truncLine(theme.fg("dim", "  " + line), w), 0, 0));
 				}
-				if (lines.length > 8) {
-					c.addChild(new Text(theme.fg("dim", `  … ${lines.length - 8} more lines`), 0, 0));
+				if (!expanded && lines.length > 8) {
+					c.addChild(new Text(theme.fg("dim", `  … ${lines.length - 8} more lines (Ctrl+O to expand)`), 0, 0));
 				}
 			}
 		}
@@ -489,6 +508,7 @@ export function renderSubagentResult(
 			const r = d.results[i];
 			const prefix = treeChar(i, total, theme);
 			c.addChild(new Text(buildAgentLine(prefix, r, agentName, cols, theme, w), 0, 0));
+			if (expanded && r) appendExpandedOutput(c, r, theme, w);
 		}
 	} else {
 		// Parallel or simple results list
@@ -497,7 +517,11 @@ export function renderSubagentResult(
 			const r = d.results[i];
 			const prefix = treeChar(i, total, theme);
 			c.addChild(new Text(buildAgentLine(prefix, r, r.agent, cols, theme, w), 0, 0));
+			if (expanded) appendExpandedOutput(c, r, theme, w);
 		}
+	}
+	if (!expanded && d.results.length > 1) {
+		c.addChild(new Text(theme.fg("dim", "  Ctrl+O to expand full responses"), 0, 0));
 	}
 
 	// Aggregate footer
