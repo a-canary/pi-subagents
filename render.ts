@@ -424,21 +424,29 @@ function getFullOutput(r: SingleResult): string {
 	const parts: string[] = [];
 	for (const msg of r.messages) {
 		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text" && part.text.trim()) parts.push(part.text.trim());
+			for (const part of (msg as any).content ?? []) {
+				if (part.type === "text" && part.text?.trim()) parts.push(part.text.trim());
 			}
 		}
+	}
+	// Fallback: recentOutput lines if messages gave nothing
+	if (parts.length === 0 && r.progress?.recentOutput?.length) {
+		return r.progress.recentOutput.join("\n");
 	}
 	return parts.join("\n\n");
 }
 
 function appendExpandedOutput(c: Container, r: SingleResult, theme: Theme, w: number): void {
 	const output = getFullOutput(r).trim();
-	if (!output) return;
-	c.addChild(new Spacer(1));
-	for (const line of output.split("\n")) {
-		c.addChild(new Text(truncLine(theme.fg("dim", "    " + line), w), 0, 0));
+	c.addChild(new Text(truncLine(theme.fg("border", `╔═ ${r.agent} ` + "═".repeat(Math.max(0, 40 - r.agent.length))), w), 0, 0));
+	if (!output) {
+		c.addChild(new Text(theme.fg("muted", "  (no output)"), 0, 0));
+	} else {
+		for (const line of output.split("\n")) {
+			c.addChild(new Text(truncLine("  " + line, w), 0, 0));
+		}
 	}
+	c.addChild(new Text(theme.fg("border", "╚" + "═".repeat(42)), 0, 0));
 	c.addChild(new Spacer(1));
 }
 
@@ -468,16 +476,21 @@ export function renderSubagentResult(
 		// Show output below for completed/failed single agents
 		const status = getStatus(r);
 		if (status === "done" || status === "failed") {
-			const output = (expanded ? getFullOutput(r) : (r.truncation?.text || getFinalOutput(r.messages))).trim();
-			if (output) {
+			if (expanded) {
 				c.addChild(new Spacer(1));
-				const lines = output.split("\n").filter(Boolean);
-				const showLines = expanded ? lines : lines.slice(-8);
-				for (const line of showLines) {
-					c.addChild(new Text(truncLine(theme.fg("dim", "  " + line), w), 0, 0));
-				}
-				if (!expanded && lines.length > 8) {
-					c.addChild(new Text(theme.fg("dim", `  … ${lines.length - 8} more lines (Ctrl+O to expand)`), 0, 0));
+				appendExpandedOutput(c, r, theme, w);
+			} else {
+				const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
+				if (output) {
+					c.addChild(new Spacer(1));
+					const lines = output.split("\n").filter(Boolean);
+					const showLines = lines.slice(-8);
+					for (const line of showLines) {
+						c.addChild(new Text(truncLine(theme.fg("dim", "  " + line), w), 0, 0));
+					}
+					if (lines.length > 8) {
+						c.addChild(new Text(theme.fg("dim", `  … ${lines.length - 8} more lines (Ctrl+O to expand)`), 0, 0));
+					}
 				}
 			}
 		}
