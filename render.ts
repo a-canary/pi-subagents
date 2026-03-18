@@ -195,20 +195,21 @@ function getActivity(r: SingleResult | undefined, status: AgentStatus, theme: Th
 		return theme.fg("error", `exit ${r.exitCode}: ${errText}`);
 	}
 
-	// Done — show compact: {msg30} [<<<|⚙|>>>] {cmd30}
+	// Done — show compact: {msg30} <<<⚙>>> {cmd30}  (fixed-width columns)
 	const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
 	const lastLine = output.split("\n").filter(Boolean).pop() || "";
-	const msg30 = lastLine.length > 30 ? lastLine.slice(0, 30) + "…" : lastLine;
+	const msgRaw = lastLine.length > 30 ? lastLine.slice(0, 30) + "…" : lastLine;
+	const msgCol = msgRaw.padEnd(31); // fixed 31-char left column
 
 	const recentTools = r.progress?.recentTools;
 	const lastTool = recentTools && recentTools.length > 0 ? recentTools[recentTools.length - 1] : undefined;
 	if (lastTool) {
 		const cmd = (lastTool.tool + " " + lastTool.args).trim();
 		const cmd30 = cmd.length > 30 ? cmd.slice(0, 30) + "…" : cmd;
-		const arrow = theme.fg("accent", "⚙");
-		return `${theme.fg("muted", msg30)} ${theme.fg("dim", "<<<")}${arrow}${theme.fg("dim", ">>>")} ${theme.fg("toolTitle", cmd30)}`;
+		const sep = `${theme.fg("dim", "<<<")}${theme.fg("accent", "⚙")}${theme.fg("dim", ">>>")}`;
+		return `${theme.fg("muted", msgCol)}${sep} ${theme.fg("toolTitle", cmd30)}`;
 	}
-	return msg30 || theme.fg("success", "✓ done");
+	return msgRaw || theme.fg("success", "✓ done");
 }
 
 // ============================================================================
