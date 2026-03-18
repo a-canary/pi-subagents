@@ -180,20 +180,13 @@ function getActivity(r: SingleResult | undefined, status: AgentStatus, theme: Th
 
 	if (status === "running") {
 		const prog = r.progress;
-		const lastMsg = prog?.recentOutput?.filter(Boolean).pop() || "";
-		const lastMsgShort = lastMsg.length > 40 ? lastMsg.slice(0, 40) + "…" : lastMsg;
-		const prefix = lastMsgShort ? theme.fg("muted", lastMsgShort + " ") : "";
 		if (prog?.currentTool) {
 			const toolName = prog.currentTool;
 			const args = prog.currentToolArgs || "";
 			const shortArgs = args.length > 35 ? args.slice(0, 35) + "…" : args;
-			return `${prefix}${theme.fg("toolTitle", ">>>⚙ " + toolName)}${shortArgs ? theme.fg("muted", "(" + shortArgs + ")") : ""}`;
+			return `${theme.fg("toolTitle", "⚙ " + toolName)}${shortArgs ? theme.fg("muted", "(" + shortArgs + ")") : ""}`;
 		}
-		const lastTool = prog?.recentTools?.at(-1);
-		const lastToolStr = lastTool
-			? `${lastTool.tool}${lastTool.args.length > 0 ? "(" + (lastTool.args.length > 35 ? lastTool.args.slice(0, 35) + "…" : lastTool.args) + ")" : ""}`
-			: "thinking…";
-		return `${prefix}${theme.fg("muted", "🧠<<< " + lastToolStr)}`;
+		return theme.fg("muted", "⚙ thinking…");
 	}
 
 	if (status === "failed") {
