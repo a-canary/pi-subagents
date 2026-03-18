@@ -197,8 +197,11 @@ function getActivity(r: SingleResult | undefined, status: AgentStatus, theme: Th
 
 	// Done — show compact: {msg30} <<<⚙>>> {cmd30}  (fixed-width columns)
 	const output = (r.truncation?.text || getFinalOutput(r.messages)).trim();
-	const lastLine = output.split("\n").filter(Boolean).pop() || "";
-	const msgRaw = lastLine.length > 30 ? lastLine.slice(0, 30) + "…" : lastLine;
+	const meaningfulLine = output.split("\n")
+		.map(l => l.trim())
+		.filter(l => l.length > 2 && !/^(`{1,3}|---|===|\|[-|]+\|)/.test(l))
+		.pop() || "";
+	const msgRaw = meaningfulLine.length > 30 ? meaningfulLine.slice(0, 30) + "…" : meaningfulLine;
 	const msgCol = msgRaw.padEnd(31); // fixed 31-char left column
 
 	const recentTools = r.progress?.recentTools;
