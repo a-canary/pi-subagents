@@ -243,6 +243,121 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
+/**
+ * Discover agents from extension directories.
+ * Scans ~/.pi/agent/extensions/{extension}/agents/ and .pi/extensions/{extension}/agents/
+ */
+function discoverExtensionAgents(cwd: string, scope: AgentScope): AgentConfig[] {
+	const agents: AgentConfig[] = [];
+	const extensionDirs: string[] = [];
+
+	// Global extensions
+	const globalExtensionsDir = path.join(os.homedir(), ".pi", "agent", "extensions");
+	if (isDirectory(globalExtensionsDir)) {
+		try {
+			const entries = fs.readdirSync(globalExtensionsDir, { withFileTypes: true });
+			for (const entry of entries) {
+				if (entry.isDirectory() || entry.isSymbolicLink()) {
+					extensionDirs.push(path.join(globalExtensionsDir, entry.name, "agents"));
+				}
+			}
+		} catch {}
+	}
+
+	// Project-local extensions (only if scope includes project)
+	if (scope !== "user") {
+		let currentDir = cwd;
+		while (true) {
+			const projectExtensionsDir = path.join(currentDir, ".pi", "extensions");
+			if (isDirectory(projectExtensionsDir)) {
+				try {
+					const entries = fs.readdirSync(projectExtensionsDir, { withFileTypes: true });
+					for (const entry of entries) {
+						if (entry.isDirectory() || entry.isSymbolicLink()) {
+							extensionDirs.push(path.join(projectExtensionsDir, entry.name, "agents"));
+						}
+					}
+				} catch {}
+			}
+
+			const parentDir = path.dirname(currentDir);
+			if (parentDir === currentDir) break;
+			currentDir = parentDir;
+		}
+	}
+
+	// Load agents from all discovered extension agent directories
+	for (const agentsDir of extensionDirs) {
+		const extensionAgents = loadAgentsFromDir(agentsDir, "user");
+		agents.push(...extensionAgents);
+	}
+
+	return agents;
+}
+
+/**
+ * Discover agents from installed pi packages.
+ * Reads ~/.pi/agent/settings.json packages, resolves each package,
+ * and loads agents from pi.agents directories declared in package.json.
+ */
+function discoverPackageAgents(): AgentConfig[] {
+	const agents: AgentConfig[] = [];
+	const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+
+	if (!fs.existsSync(settingsPath)) return agents;
+
+	let settings: { packages?: string[] };
+	try {
+		settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+	} catch {
+		return agents;
+	}
+
+	if (!settings.packages) return agents;
+
+	for (const pkgRef of settings.packages) {
+		// Resolve package path
+		let pkgPath: string;
+		if (pkgRef.startsWith("npm:")) {
+			// npm package - resolve from node_modules
+			const pkgName = pkgRef.slice(4);
+			const globalExtensionsDir = path.join(os.homedir(), ".pi", "agent", "extensions");
+			pkgPath = path.join(globalExtensionsDir, "node_modules", pkgName);
+		} else if (pkgRef.startsWith("git:")) {
+			// git package - resolve from git directory
+			const repoName = pkgRef.slice(4).replace(/^github\.com\//, "");
+			pkgPath = path.join(os.homedir(), ".pi", "agent", "git", repoName);
+		} else if (pkgRef.startsWith("/") || pkgRef.startsWith("./") || pkgRef.startsWith("../")) {
+			// Local path - resolve relative to settings file
+			pkgPath = path.resolve(path.dirname(settingsPath), pkgRef);
+		} else {
+			continue;
+		}
+
+		// Read package.json to find pi.agents
+		const pkgJsonPath = path.join(pkgPath, "package.json");
+		if (!fs.existsSync(pkgJsonPath)) continue;
+
+		let pkgJson: { pi?: { agents?: string[] } };
+		try {
+			pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8"));
+		} catch {
+			continue;
+		}
+
+		const agentDirs = pkgJson.pi?.agents;
+		if (!agentDirs) continue;
+
+		for (const agentDir of agentDirs) {
+			const fullPath = path.join(pkgPath, agentDir);
+			const pkgAgents = loadAgentsFromDir(fullPath, "user");
+			agents.push(...pkgAgents);
+		}
+	}
+
+	return agents;
+}
+
 const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
@@ -252,7 +367,12 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const builtinAgents = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
-	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents);
+	const extensionAgents = discoverExtensionAgents(cwd, scope);
+	const packageAgents = discoverPackageAgents();
+
+	// Merge: extension and package agents are treated as user-level for precedence
+	const allUserAgents = [...userAgents, ...extensionAgents, ...packageAgents];
+	const agents = mergeAgentsForScope(scope, allUserAgents, projectAgents, builtinAgents);
 
 	return { agents, projectAgentsDir };
 }
@@ -271,10 +391,15 @@ export function discoverAgentsAll(cwd: string): {
 	const builtin = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
 	const user = loadAgentsFromDir(userDir, "user");
 	const project = projectDir ? loadAgentsFromDir(projectDir, "project") : [];
+	const extension = discoverExtensionAgents(cwd, "both");
+	const pkg = discoverPackageAgents();
+	// Extension and package agents are included in user array for precedence
+	const allUser = [...user, ...extension, ...pkg];
+
 	const chains = [
 		...loadChainsFromDir(userDir, "user"),
 		...(projectDir ? loadChainsFromDir(projectDir, "project") : []),
 	];
 
-	return { builtin, user, project, chains, userDir, projectDir };
+	return { builtin, user: allUser, project, chains, userDir, projectDir };
 }
