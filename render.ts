@@ -10,6 +10,7 @@
  *   ╰ ✓ builder   sonnet-4  11.2k tok  16.7s  $0.04  3 files changed
  */
 
+import * as fs from "node:fs";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Container, Text, Spacer, visibleWidth } from "@mariozechner/pi-tui";
@@ -459,6 +460,8 @@ export function renderSubagentResult(
 	const expanded = options.expanded;
 	const w = getTermWidth() - 4;
 	const c = new Container();
+	// Debug: log expanded state to file
+	try { fs.appendFileSync("/tmp/pi-subagent-expand.log", `${new Date().toISOString()} expanded=${expanded} mode=${d?.mode} results=${d?.results?.length}\n`); } catch {}
 
 	if (!d || !d.results.length) {
 		const t = result.content[0];
