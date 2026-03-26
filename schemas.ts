@@ -52,13 +52,6 @@ export const ParallelStepSchema = Type.Object({
 // Note: Using Type.Any() for Google API compatibility (doesn't support anyOf)
 export const ChainItem = Type.Any({ description: "Chain step: either {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
 
-export const MaxOutputSchema = Type.Optional(
-	Type.Object({
-		bytes: Type.Optional(Type.Number({ description: "Max bytes (default: 204800)" })),
-		lines: Type.Optional(Type.Number({ description: "Max lines (default: 5000)" })),
-	}),
-);
-
 export const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode)" })),
@@ -76,11 +69,14 @@ export const SubagentParams = Type.Object({
 	})),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task}, ...]" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
+	context: Type.Optional(Type.String({
+		enum: ["fresh", "fork"],
+		description: "'fresh' (default) or 'fork' to branch from parent session",
+	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: <tmpdir>/pi-chain-runs/ (auto-cleaned after 24h)" })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
 	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: 'user', 'project', or 'both' (default: 'both'; project wins on name collisions)" })),
 	cwd: Type.Optional(Type.String()),
-	maxOutput: MaxOutputSchema,
 	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts (default: true)" })),
 	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress in result (default: false)" })),
 	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist for sharing (default: false)" })),
@@ -90,7 +86,7 @@ export const SubagentParams = Type.Object({
 	// Clarification TUI
 	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: true for chains, false for single/parallel). Implies sync mode." })),
 	// Solo agent overrides
-	output: Type.Optional(Type.Any({ description: "Override output file for single agent (string), or false to disable (uses agent default if omitted). Absolute paths are used as-is; relative paths resolve against cwd." })),
+	output: Type.Optional(Type.Any({ description: "Output file for single agent (string), or false to disable. Relative paths resolve against cwd." })),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
 });

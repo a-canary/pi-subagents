@@ -2,6 +2,87 @@
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-03-23
+
+### Changed
+- Updated for pi 0.62.0 compatibility. `Skill.source` replaced with `Skill.sourceInfo` for skill provenance, `Widget` type replaced with `Component`. Bumped devDependencies to `^0.62.0`.
+
+## [0.11.10] - 2026-03-21
+
+### Changed
+- Trimmed tool schema and description to reduce per-turn token cost by ~166 tokens (13%). Removed `maxOutput` from the LLM-facing schema (still accepted internally), shortened `context` and `output` descriptions, removed redundant CHAIN DATA FLOW section from tool description, condensed MANAGEMENT bullet points.
+
+## [0.11.9] - 2026-03-21
+
+### Fixed
+- `/agents` overlay launches (single, chain, parallel) and slash commands (`/run`, `/chain`, `/parallel`) now render an inline result card in chat instead of relaying through `sendUserMessage`.
+- `/agents` overlay chain launches no longer bypass the executor for async fallback, fixing a path where async chain errors were silently swallowed.
+
+### Changed
+- All slash and overlay subagent execution now routes through an event bus request/response protocol (`slash-bridge.ts`), matching the pattern used by pi-prompt-template-model. This replaces both the old `sendUserMessage` relay and the direct `executeChain` call in the overlay handler.
+- Slash launches show a live inline card immediately on start that streams current tool, recent tools, and output in real time, rather than appearing only after completion.
+- `/parallel` now uses the native `tasks` parameter directly instead of wrapping through `{ chain: [{ parallel: tasks }] }`.
+
+### Added
+- `slash-bridge.ts` — event bus bridge for slash command execution. Manages AbortController lifecycle, cancel-before-start races, and progress streaming via `subagent:slash:*` events.
+- `slash-live-state.ts` — request-id keyed snapshot store that drives live inline card rendering during execution and restores finalized results from session entries on reload.
+- Clarified README Usage section to distinguish LLM tool parameters from user-facing slash commands.
+
+## [0.11.8] - 2026-03-21
+
+### Added
+- Prompt-template delegation bridge now supports parallel task execution: accepts `tasks` array payloads, emits per-task `parallelResults` with individual error/success states, and streams per-task progress updates with `taskProgress` entries.
+
+## [0.11.7] - 2026-03-20
+
+### Changed
+- Removed the cwd mismatch guard from the prompt-template delegation bridge, allowing delegated requests to specify a working directory different from the active session's cwd.
+
+## [0.11.6] - 2026-03-20
+
+### Added
+- Added `delegate` builtin agent — a lightweight subagent with no model, output, or default reads. Inherits the parent session's model, making it the natural target for prompt-template delegated execution.
+
+## [0.11.5] - 2026-03-20
+
+### Added
+- Added fork context preamble: tasks run with `context: "fork"` are now wrapped with a default preamble that anchors the subagent to its task, preventing it from continuing the parent conversation. The default is `DEFAULT_FORK_PREAMBLE` in `types.ts`. Internal/programmatic callers can use `wrapForkTask(task, false)` to disable it or pass a custom string (this is not exposed as a tool parameter).
+- Added a prompt-template delegation bridge (`prompt-template-bridge.ts`) on the shared extension event bus. The subagent extension now listens for `prompt-template:subagent:request` and emits correlated `started`/`response`/`update` events, with cwd safety checks and race-safe cancellation handling.
+- Added delegated progress streaming via `prompt-template:subagent:update`, mapped from subagent executor `onUpdate` progress payloads.
+
+### Changed
+- Session lifecycle reset now preserves the latest extension context for event-bus delegated runs.
+- `[fork]` badge is now shown only on the result row, not duplicated on both the tool-call and result rows.
+
+## [0.11.4] - 2026-03-19
+
+### Added
+- Added explicit execution context mode for tool calls: `context: "fresh" | "fork"` (default: `fresh`).
+- Added true forked-context execution for single, parallel, and chain runs. In `fork` mode each child run now starts from a real branched session file created from the parent session's current leaf.
+- Added `--fork` slash-command flag for `/run`, `/chain`, and `/parallel` to forward `context: "fork"`.
+- Added regression coverage for fork execution/session wiring and fork badge rendering, including slash command forwarding tests.
+
+### Changed
+- Session argument wiring now supports `--session <file>` in addition to `--session-dir`, enabling exact leaf-preserving forks without summary injection.
+- Async runner step payloads now carry per-step session files so background single/chain/parallel executions can also honor `context: "fork"`.
+- Clarified docs for foreground vs background semantics so `--bg` behavior is explicit.
+
+### Fixed
+- `context: "fork"` now fails fast with explicit errors when parent session state is unavailable (missing persisted session, missing current leaf, or failed branch extraction), with no silent fallback to `fresh`.
+- Fork-session creation errors are now surfaced as tool errors instead of bubbling as uncaught exceptions during execution.
+- Session directory preparation now fails loudly with actionable errors (instead of silently swallowing mkdir failures).
+- Async launch now fails with explicit errors when the async run directory cannot be created.
+- Share logs now correctly include forked session files even when no session directory exists.
+- Tool-call and result rendering now explicitly show `[fork]` when `context: "fork"` is used, including empty-result responses.
+- `subagent_status` now surfaces async result-file read failures instead of returning a misleading missing-status message.
+
+## [0.11.3] - 2026-03-17
+
+### Changed
+- Decomposed `index.ts` (1,450 → ~350 lines) into focused modules: `subagent-executor.ts`, `async-job-tracker.ts`, `result-watcher.ts`, `slash-commands.ts`. Shared mutable state centralized in `SubagentState` interface. Three identical session handlers collapsed into one.
+- Extracted shared pi CLI arg-builder (`pi-args.ts`) from duplicated logic in `execution.ts` and `subagent-runner.ts`.
+- Consolidated `mapConcurrent` (canonical in `parallel-utils.ts`, re-exported from `utils.ts`), `aggregateParallelOutputs` (canonical in `parallel-utils.ts` with optional header formatter, re-exported from `settings.ts`), and `parseFrontmatter` (extracted to `frontmatter.ts`).
+
 ## [0.11.2] - 2026-03-11
 
 ### Fixed

@@ -5,6 +5,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
+import type { FSWatcher } from "node:fs";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 // ============================================================================
 // Basic Types
@@ -99,6 +101,7 @@ export interface SingleResult {
 
 export interface Details {
 	mode: "single" | "parallel" | "chain" | "management";
+	context?: "fresh" | "fork";
 	results: SingleResult[];
 	asyncId?: string;
 	asyncDir?: string;
@@ -175,6 +178,22 @@ export interface AsyncJobState {
 	sessionFile?: string;
 }
 
+export interface SubagentState {
+	baseCwd: string;
+	currentSessionId: string | null;
+	asyncJobs: Map<string, AsyncJobState>;
+	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
+	lastUiContext: ExtensionContext | null;
+	poller: NodeJS.Timeout | null;
+	completionSeen: Map<string, number>;
+	watcher: FSWatcher | null;
+	watcherRestartTimer: ReturnType<typeof setTimeout> | null;
+	resultFileCoalescer: {
+		schedule(file: string, delayMs?: number): boolean;
+		clear(): void;
+	};
+}
+
 // ============================================================================
 // Display
 // ============================================================================
@@ -208,6 +227,7 @@ export interface RunSyncOptions {
 	runId: string;
 	index?: number;
 	sessionDir?: string;
+	sessionFile?: string;
 	share?: boolean;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
@@ -243,9 +263,28 @@ export const MAX_CONCURRENCY = 4;
 export const RESULTS_DIR = path.join(os.tmpdir(), "pi-async-subagent-results");
 export const ASYNC_DIR = path.join(os.tmpdir(), "pi-async-subagent-runs");
 export const WIDGET_KEY = "subagent-async";
+export const SLASH_RESULT_TYPE = "subagent-slash-result";
+export const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
+export const SLASH_SUBAGENT_STARTED_EVENT = "subagent:slash:started";
+export const SLASH_SUBAGENT_RESPONSE_EVENT = "subagent:slash:response";
+export const SLASH_SUBAGENT_UPDATE_EVENT = "subagent:slash:update";
+export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
+
+export const DEFAULT_FORK_PREAMBLE =
+	"You are a delegated subagent with access to the parent session's context for reference. " +
+	"Your sole job is to execute the task below. Do not continue or respond to the prior conversation " +
+	"— focus exclusively on completing this task using your tools.";
+
+export function wrapForkTask(task: string, preamble?: string | false): string {
+	if (preamble === false) return task;
+	const effectivePreamble = preamble ?? DEFAULT_FORK_PREAMBLE;
+	const wrappedPrefix = `${effectivePreamble}\n\nTask:\n`;
+	if (task.startsWith(wrappedPrefix)) return task;
+	return `${wrappedPrefix}${task}`;
+}
 
 // ============================================================================
 // Recursion Depth Guard

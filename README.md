@@ -20,6 +20,22 @@ To remove:
 npx pi-subagents --remove
 ```
 
+If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can wrap subagent delegation in a slash command:
+
+```markdown
+---
+description: Take a screenshot
+model: claude-sonnet-4-20250514
+subagent: browser-screenshoter
+cwd: /tmp/screenshots
+---
+Use url in the prompt to take screenshot: $@
+```
+
+Then `/take-screenshot https://example.com` switches to Sonnet, delegates to the `browser-screenshoter` agent with `/tmp/screenshots` as the working directory, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--subagent=<name>` work too.
+
+pi-prompt-template-model is entirely optional — pi-subagents works standalone through the `subagent` tool and slash commands.
+
 ## Agents
 
 Agents are markdown files with YAML frontmatter that define specialized subagent configurations.
@@ -34,7 +50,7 @@ Agents are markdown files with YAML frontmatter that define specialized subagent
 
 Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"both"` (default; project takes priority).
 
-**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, and `researcher`. They load at lowest priority so any user or project agent with the same name overrides them. Builtin agents appear with a `[builtin]` badge in listings and cannot be modified through management actions (create a same-named user agent to override instead).
+**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, and `delegate`. They load at lowest priority so any user or project agent with the same name overrides them. Builtin agents appear with a `[builtin]` badge in listings and cannot be modified through management actions (create a same-named user agent to override instead).
 
 > **Note:** The `researcher` agent uses `web_search`, `fetch_content`, and `get_search_content` tools which require the [pi-web-access](https://github.com/nicobailon/pi-web-access) extension. Install it with `pi install npm:pi-web-access`.
 
@@ -81,9 +97,11 @@ Semantics:
 
 When `extensions` is present, it takes precedence over extension paths implied by `tools` entries.
 
-**MCP Tools**
+**MCP Tools (optional)**
 
-Agents can use MCP server tools directly (requires the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension). Add `mcp:` prefixed entries to the `tools` field:
+If you have the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension installed, subagents can use MCP server tools directly. Without that extension, everything below is ignored — MCP integration is entirely optional.
+
+Add `mcp:` prefixed entries to the `tools` field in agent frontmatter:
 
 ```yaml
 # All tools from a server
@@ -102,7 +120,7 @@ The `mcp:` items are additive — they don't affect which builtins the agent get
 
 Subagents only get direct MCP tools when `mcp:` items are explicitly listed. Even if your `mcp.json` has `directTools: true` globally, a subagent without `mcp:` in its frontmatter won't get any direct tools — keeping it lean. The `mcp` proxy tool is still available for discovery if needed.
 
-The MCP adapter's metadata cache must be populated for direct tools to work. On the first session with a new MCP server, tools will only be available through the `mcp` proxy. Restart Pi after the first session and direct tools become available.
+> **First-run caveat:** The MCP adapter caches tool metadata at startup. The first time you connect to a new MCP server, that cache is empty, so tools are only available through the generic `mcp` proxy. After that first session, restart pi and direct tools become available.
 
 **Resolution priority:** step override > agent frontmatter > disabled
 
@@ -172,7 +190,24 @@ Add `--bg` at the end of any slash command to run in the background:
 /parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
 ```
 
-Background tasks run asynchronously and notify you when complete. Check status with `subagent_status`.
+Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases subagents run as separate processes. Check status with `subagent_status`.
+
+### Forked Context Execution
+
+Add `--fork` at the end of `/run`, `/chain`, or `/parallel` to run with `context: "fork"`:
+
+```
+/run reviewer "review this diff" --fork
+/chain scout "analyze this branch" -> planner "plan next steps" --fork
+/parallel scout "audit frontend" -> reviewer "audit backend" --fork
+```
+
+You can combine `--fork` and `--bg` in any order:
+
+```
+/run reviewer "review this diff" --fork --bg
+/run reviewer "review this diff" --bg --fork
+```
 
 ## Agents Manager
 
@@ -285,7 +320,9 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 | Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 
-All modes support background/async execution. For programmatic async, use `clarify: false, async: true`. For interactive async, use `clarify: true` and press `b` in the TUI to toggle background mode before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
+Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
+
+All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `clarify: false, async: true`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
 **Clarify TUI for single/parallel:**
 
@@ -390,15 +427,23 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 
 ## Usage
 
-**subagent tool:**
+These are the parameters the **LLM agent** passes when it calls the `subagent` tool — not something you type directly. The agent decides to use these based on your conversation. For user-facing commands, see [Quick Commands](#quick-commands) above.
+
+**subagent tool parameters:**
 ```typescript
 // Single agent
 { agent: "worker", task: "refactor auth" }
 { agent: "scout", task: "find todos", maxOutput: { lines: 1000 } }
 { agent: "scout", task: "investigate", output: false }  // disable file output
 
-// Parallel (sync only)
+// Single agent from parent-session fork (real branched session at current leaf)
+{ agent: "worker", task: "continue this thread", context: "fork" }
+
+// Parallel
 { tasks: [{ agent: "scout", task: "a" }, { agent: "scout", task: "b" }] }
+
+// Parallel with forked context (each task gets its own isolated fork)
+{ tasks: [{ agent: "scout", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
 
 // Chain with TUI clarification (default)
 { chain: [
@@ -407,6 +452,12 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
   { agent: "worker" },   // uses agent defaults for reads/progress
   { agent: "reviewer" }
 ]}
+
+// Chain with forked context (each step gets its own isolated fork of the same parent leaf)
+{ chain: [
+  { agent: "scout", task: "Analyze current branch decisions" },
+  { agent: "planner", task: "Plan from {previous}" }
+], context: "fork" }
 
 // Chain without TUI (enables async)
 { chain: [...], clarify: false, async: true }
@@ -529,6 +580,7 @@ Notes:
 | `model` | string | agent default | Override model for single agent |
 | `tasks` | `{agent, task, cwd?, skill?}[]` | - | Parallel tasks (sync only) |
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
+| `context` | `"fresh" \| "fork"` | `fresh` | Execution context mode. `fork` uses a real branched session from the parent's current leaf for each child run |
 | `chainDir` | string | `<tmpdir>/pi-chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
 | `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
 | `agentScope` | `"user" \| "project" \| "both"` | `both` | Agent discovery scope (project wins on name collisions) |
@@ -539,6 +591,8 @@ Notes:
 | `includeProgress` | boolean | false | Include full progress in result |
 | `share` | boolean | false | Upload session to GitHub Gist (see [Session Sharing](#session-sharing)) |
 | `sessionDir` | string | - | Override session log directory (takes precedence over `defaultSessionDir` and parent-session-derived path) |
+
+`context: "fork"` fails fast when the parent session is not persisted, the current leaf is missing, or a branched child session cannot be created. It never silently downgrades to `fresh`.
 
 **ChainItem** can be either a sequential step or a parallel step:
 
@@ -650,6 +704,8 @@ Files per task:
 ## Session Logs
 
 Session files (JSONL) are stored under a per-run session directory. Directory selection follows the same precedence as session root resolution: explicit `sessionDir` > `config.defaultSessionDir` > parent-session-derived path. The session file path is shown in output.
+
+When `context: "fork"` is used, each child run starts with `--session <branched-session-file>` produced from the parent's current leaf. This is a real session fork, not injected summary text.
 
 ## Session Sharing
 

@@ -4,7 +4,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getMarkdownTheme, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, truncateToWidth, visibleWidth, type Widget } from "@mariozechner/pi-tui";
+import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@mariozechner/pi-tui";
 import {
 	type AsyncJobState,
 	type Details,
@@ -179,12 +179,13 @@ export function renderSubagentResult(
 	result: AgentToolResult<Details>,
 	_options: { expanded: boolean },
 	theme: Theme,
-): Widget {
+): Component {
 	const d = result.details;
 	if (!d || !d.results.length) {
 		const t = result.content[0];
 		const text = t?.type === "text" ? t.text : "(no output)";
-		return new Text(truncLine(text, getTermWidth() - 4), 0, 0);
+		const contextPrefix = d?.context === "fork" ? `${theme.fg("warning", "[fork]")} ` : "";
+		return new Text(truncLine(`${contextPrefix}${text}`, getTermWidth() - 4), 0, 0);
 	}
 
 	const mdTheme = getMarkdownTheme();
@@ -197,6 +198,7 @@ export function renderSubagentResult(
 			: r.exitCode === 0
 				? theme.fg("success", "ok")
 				: theme.fg("error", "X");
+		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 		const output = r.truncation?.text || getFinalOutput(r.messages);
 
 		const progressInfo = isRunning && r.progress
@@ -207,7 +209,7 @@ export function renderSubagentResult(
 
 		const w = getTermWidth() - 4;
 		const c = new Container();
-		c.addChild(new Text(truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${progressInfo}`, w), 0, 0));
+		c.addChild(new Text(truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${progressInfo}`, w), 0, 0));
 		c.addChild(new Spacer(1));
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = r.task.length > taskMaxLen
@@ -217,6 +219,36 @@ export function renderSubagentResult(
 			new Text(truncLine(theme.fg("dim", `Task: ${taskPreview}`), w), 0, 0),
 		);
 		c.addChild(new Spacer(1));
+
+		if (isRunning && r.progress) {
+			if (r.progress.currentTool) {
+				const maxToolArgsLen = Math.max(50, w - 20);
+				const toolArgsPreview = r.progress.currentToolArgs
+					? (r.progress.currentToolArgs.length > maxToolArgsLen
+						? `${r.progress.currentToolArgs.slice(0, maxToolArgsLen)}...`
+						: r.progress.currentToolArgs)
+					: "";
+				const toolLine = toolArgsPreview
+					? `${r.progress.currentTool}: ${toolArgsPreview}`
+					: r.progress.currentTool;
+				c.addChild(new Text(truncLine(theme.fg("warning", `> ${toolLine}`), w), 0, 0));
+			}
+			if (r.progress.recentTools?.length) {
+				for (const t of r.progress.recentTools.slice(-3)) {
+					const maxArgsLen = Math.max(40, w - 24);
+					const argsPreview = t.args.length > maxArgsLen
+						? `${t.args.slice(0, maxArgsLen)}...`
+						: t.args;
+					c.addChild(new Text(truncLine(theme.fg("dim", `${t.tool}: ${argsPreview}`), w), 0, 0));
+				}
+			}
+			for (const line of (r.progress.recentOutput ?? []).slice(-5)) {
+				c.addChild(new Text(truncLine(theme.fg("dim", `  ${line}`), w), 0, 0));
+			}
+			if (r.progress.currentTool || r.progress.recentTools?.length || r.progress.recentOutput?.length) {
+				c.addChild(new Spacer(1));
+			}
+		}
 
 		const items = getDisplayItems(r.messages);
 		for (const item of items) {
@@ -285,6 +317,7 @@ export function renderSubagentResult(
 			: "";
 
 	const modeLabel = d.mode;
+	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	// For parallel-in-chain, show task count (results) for consistency with step display
 	// For sequential chains, show logical step count
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
@@ -324,7 +357,7 @@ export function renderSubagentResult(
 	const c = new Container();
 	c.addChild(
 		new Text(
-			truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${stepInfo}${summaryStr}`, w),
+			truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${contextBadge}${stepInfo}${summaryStr}`, w),
 			0,
 			0,
 		),
