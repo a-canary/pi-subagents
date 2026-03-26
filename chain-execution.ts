@@ -70,6 +70,7 @@ export interface ChainExecutionParams {
 	cwd?: string;
 	shareEnabled: boolean;
 	sessionDirForIndex: (idx?: number) => string | undefined;
+	sessionFileForIndex?: (idx?: number) => string | undefined;
 	artifactsDir: string;
 	artifactConfig: ArtifactConfig;
 	includeProgress?: boolean;
@@ -103,6 +104,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		cwd,
 		shareEnabled,
 		sessionDirForIndex,
+		sessionFileForIndex,
 		artifactsDir,
 		artifactConfig,
 		includeProgress,
@@ -333,6 +335,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						runId,
 						index: globalTaskIndex + taskIndex,
 						sessionDir: sessionDirForIndex(globalTaskIndex + taskIndex),
+						sessionFile: sessionFileForIndex?.(globalTaskIndex + taskIndex),
 						share: shareEnabled,
 						artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 						artifactConfig,
@@ -489,6 +492,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				runId,
 				index: globalTaskIndex,
 				sessionDir: sessionDirForIndex(globalTaskIndex),
+				sessionFile: sessionFileForIndex?.(globalTaskIndex),
 				share: shareEnabled,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
